@@ -1,0 +1,7 @@
+# Block direct access to config and schema
+<FilesMatch "\.(sql|md)$">
+  Require all denied
+</FilesMatch>
+<Files "config.php">
+  Require all denied
+</Files>
