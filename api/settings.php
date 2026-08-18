@@ -10,6 +10,7 @@ const ALLOWED = [
     'company_phone', 'company_gstin', 'company_pan', 'company_website', 'company_bank',
     'invoice_prefix', 'invoice_terms', 'invoice_currency', 'invoice_footer',
     'salary_pay_date',
+    'signatory_name', 'signatory_title', 'invoice_conditions',
 ];
 
 const DEFAULTS = [
@@ -27,6 +28,9 @@ const DEFAULTS = [
     'invoice_currency'=> 'INR',
     'invoice_footer'  => 'Thank you for your business.',
     'salary_pay_date' => '20',
+    'signatory_name'  => '',
+    'signatory_title' => 'Founder & CEO',
+    'invoice_conditions' => "Please send payment within 30 days of receiving this invoice.\nThere will be 10% interest charge per month on late invoice.",
 ];
 
 if ($action === 'get') {
@@ -58,7 +62,10 @@ if ($action === 'save') {
             $d = (int)$v;
             $v = (string)max(1, min(31, $d ?: 20));
         }
-        if (mb_strlen($v) > 500) $v = mb_substr($v, 0, 500);
+        // Terms & conditions is a multi-line block, so it gets more room
+        // than the short single-line fields.
+        $limit = $k === 'invoice_conditions' ? 1000 : 500;
+        if (mb_strlen($v) > $limit) $v = mb_substr($v, 0, $limit);
 
         $st->execute([$k, $v]);
         $saved++;

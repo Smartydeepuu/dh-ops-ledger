@@ -67,12 +67,14 @@ export const api = {
   deleteDocument:(id)    => call("documents", "delete", { id }),
   documentUrl:   (id)    => `${BASE}/documents.php?action=download&id=${id}`,
 
-  uploadDocument: async (file, name, cat) => {
+  uploadDocument: async (file, name, cat, assoc = {}) => {
     const fd = new FormData();
     fd.append("action", "upload");
     fd.append("file", file);
     fd.append("name", name);
     fd.append("cat", cat);
+    if (assoc.clientId) fd.append("client_id", assoc.clientId);
+    if (assoc.empId) fd.append("employee_id", assoc.empId);
 
     let res, json;
     try {
@@ -92,4 +94,8 @@ export const api = {
 
   settings:      ()      => call("settings", "get"),
   saveSettings:  (settings) => call("settings", "save", { settings }),
+
+  banks:         ()      => call("banks", "list"),
+  saveBank:      (b)     => call("banks", "save", b),
+  deleteBank:    (id)    => call("banks", "delete", { id }),
 };

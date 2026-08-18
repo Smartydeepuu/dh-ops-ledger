@@ -6,7 +6,7 @@ import {
   Settings, Search, Bell, Moon, Sun, ChevronDown, ChevronRight, ChevronLeft, Plus, X, Calendar as CalendarIcon,
   Mail, Phone, Pencil, Upload, AlertTriangle, Trash2,
   Download, TrendingUp, PiggyBank, Package, BarChart3, Clock, CheckCircle2,
-  CircleDot, FileSignature, MoreHorizontal, ChevronsLeft
+  CircleDot, FileSignature, MoreHorizontal, ChevronsLeft, Eye
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -157,6 +157,18 @@ const FONTS = `
 
 const inr = (n) => "₹" + Math.round(n || 0).toLocaleString("en-IN");
 
+// Browsers print their own header (page title) and footer (page URL) — that
+// text comes from the browser's print dialog and can't be removed or styled
+// from the page itself. The one thing a page CAN influence is what shows as
+// the title, so we swap document.title to the invoice/slip number for the
+// moment of printing and restore it right after.
+const printWithTitle = (label) => {
+  const prev = document.title;
+  if (label) document.title = label;
+  window.print();
+  document.title = prev;
+};
+
 const CURRENCIES = {
   INR: { sym: "₹",  locale: "en-IN", label: "INR — Indian Rupee" },
   USD: { sym: "$",  locale: "en-US", label: "USD — US Dollar" },
@@ -167,6 +179,14 @@ const CURRENCIES = {
 const money = (n, cur = "INR") => {
   const k = CURRENCIES[cur] ? cur : "INR";
   return CURRENCIES[k].sym + Math.round(n || 0).toLocaleString(CURRENCIES[k].locale);
+};
+
+// Same as money(), but always keeps 2 decimal places — used only on the
+// invoice document/PDF itself, so line-item math is never silently rounded
+// away (₹205.60 should never print as ₹206).
+const moneyDecimal = (n, cur = "INR") => {
+  const k = CURRENCIES[cur] ? cur : "INR";
+  return CURRENCIES[k].sym + (n || 0).toLocaleString(CURRENCIES[k].locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 // Sums invoices grouped by their own currency, e.g. "₹3,25,000 · $1,200"
@@ -810,11 +830,225 @@ function IconTile({ Icon, tone, size = 40, className = "" }) {
   );
 }
 
+/* --------------------------- themed dropdowns ---------------------------- */
+
+/* Flattens whatever React put inside an <option> into a plain string, so
+   labels built from several expressions still read correctly. */
+const flatLabel = (n) => {
+  if (Array.isArray(n)) return n.map(flatLabel).join("");
+  if (n == null || n === false || n === true) return "";
+  return String(n);
+};
+
+/* Drop-in replacement for <select>: same value/onChange/style contract, but
+   painted with the app's own colours instead of the browser's native menu. */
+function Select({ c, value, onChange, style = {}, children, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+  const panelRef = useRef(null);
+
+  const opts = [];
+  React.Children.forEach(children, (child) => {
+    if (!child || !child.props) return;
+    const label = flatLabel(child.props.children);
+    const val = child.props.value !== undefined ? child.props.value : label;
+    opts.push({ value: val, label });
+  });
+
+  const current = opts.find(o => String(o.value) === String(value));
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target) &&
+          panelRef.current && !panelRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !ref.current) return;
+    const place = () => {
+      const r = ref.current.getBoundingClientRect();
+      const width = Math.max(r.width, 150);
+      let left = r.left;
+      if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
+      if (left < 10) left = 10;
+      // Prefer dropping below, but flip above when the panel wouldn't fit —
+      // otherwise long lists get cut off at the bottom of the window.
+      const wanted = Math.min(opts.length * 38 + 12, 260);
+      const below = window.innerHeight - r.bottom - 12;
+      const above = r.top - 12;
+      const dropUp = below < wanted && above > below;
+      setPos({
+        top: dropUp ? Math.max(10, r.top - 6 - Math.min(wanted, above)) : r.bottom + 6,
+        left, width, maxHeight: Math.min(wanted, Math.max(dropUp ? above : below, 120)),
+      });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [open, opts.length]);
+
+  const pick = (o) => { onChange({ target: { value: o.value } }); setOpen(false); };
+
+  const panel = open && pos && ReactDOM.createPortal(
+    <div ref={panelRef} style={{
+      position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 210,
+      background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 6,
+      maxHeight: pos.maxHeight, overflowY: "auto",
+      boxShadow: "0 16px 40px rgba(15,23,42,.20)",
+    }}>
+      {opts.map((o, i) => {
+        const on = String(o.value) === String(value);
+        return (
+          <button key={i} type="button" onClick={() => pick(o)}
+            style={{
+              width: "100%", textAlign: "left", padding: "9px 12px", borderRadius: 9,
+              fontSize: 13.5, fontWeight: on ? 600 : 500,
+              color: on ? A.orange : c.ink,
+              background: on ? A.orangeSoft : "transparent",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>, document.body);
+
+  return (
+    <>
+      <button ref={ref} type="button" disabled={disabled}
+        onClick={() => !disabled && setOpen(o => !o)}
+        style={{
+          ...style, boxSizing: "border-box",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+          textAlign: "left", cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? .6 : 1,
+        }}>
+        <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {current ? current.label : ""}
+        </span>
+        <ChevronDown size={15} color={c.muted} style={{ flexShrink: 0 }} />
+      </button>
+      {panel}
+    </>
+  );
+}
+
+/* ------------------------------- row menus ------------------------------- */
+
+/* Rendered into a portal so the menu is never clipped by a card's
+   overflow:hidden or by the edge of a scrolling table. */
+function RowMenu({ c, anchorRef, items, onClose }) {
+  const [pos, setPos] = useState(null);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (panelRef.current && !panelRef.current.contains(e.target) &&
+          (!anchorRef?.current || !anchorRef.current.contains(e.target))) onClose();
+    };
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [onClose, anchorRef]);
+
+  useEffect(() => {
+    const place = () => {
+      const el = anchorRef?.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const width = 150;
+      let left = r.right - width;
+      if (left < 10) left = 10;
+      if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
+      const height = items.length * 38 + 12;
+      const dropUp = window.innerHeight - r.bottom < height + 12 && r.top > height + 12;
+      setPos({ top: dropUp ? r.top - 6 - height : r.bottom + 6, left, width });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [anchorRef, items.length]);
+
+  if (!pos) return null;
+
+  return ReactDOM.createPortal(
+    <div ref={panelRef} onClick={e => e.stopPropagation()}
+      style={{
+        position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 210,
+        background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 6,
+        boxShadow: "0 16px 40px rgba(15,23,42,.20)",
+      }}>
+      {items.map((it, i) => (
+        <button key={i} type="button" onClick={() => { onClose(); it.onClick(); }}
+          style={{
+            width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 9,
+            padding: "9px 12px", borderRadius: 9, fontSize: 13.5,
+            fontWeight: it.danger ? 600 : 500, color: it.danger ? A.red : c.ink,
+          }}>
+          <it.Icon size={15} /> {it.label}
+        </button>
+      ))}
+    </div>, document.body);
+}
+
+/* Small ⋯ button that opens a RowMenu. Keeps its own anchor + open state so
+   list rows stay simple. */
+function RowMenuButton({ c, items, size = 17, style = {} }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  return (
+    <>
+      <button ref={btnRef} type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        style={{ color: c.muted, display: "inline-flex", ...style }}>
+        <MoreHorizontal size={size} />
+      </button>
+      {open && <RowMenu c={c} anchorRef={btnRef} items={items} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function ConfirmModal({ c, title, message, confirmLabel = "Delete", onCancel, onConfirm }) {
+  return (
+    <div onClick={onCancel}
+      style={{ position: "fixed", inset: 0, zIndex: 220, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: c.card, borderRadius: 18, width: "100%", maxWidth: 390, padding: 22 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>{title}</div>
+        <div style={{ fontSize: 13.5, color: c.inkSoft, marginBottom: 20, lineHeight: 1.55 }}>{message}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={onCancel}
+            style={{ flex: 1, padding: 12, borderRadius: 12, border: `1px solid ${c.border}`, background: c.card, color: c.ink, fontSize: 14, fontWeight: 600 }}>
+            Cancel
+          </button>
+          <button onClick={onConfirm}
+            style={{ flex: 1, padding: 12, borderRadius: 12, background: A.red, color: "#fff", fontSize: 14, fontWeight: 600 }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------------- app ---------------------------------- */
 
 export default function App() {
   const [dark, setDark] = useState(false);
-  const [page, setPage] = useState("dashboard");
+  const VALID_PAGES = ["dashboard", "clients", "invoices", "employees", "salary", "expenses", "documents", "settings"];
+  const [page, setPage] = useState(() => {
+    const h = (window.location.hash || "").replace("#", "");
+    return VALID_PAGES.includes(h) ? h : "dashboard";
+  });
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
   const [loadErr, setLoadErr] = useState("");
@@ -835,6 +1069,7 @@ export default function App() {
   const [salYear, setSalYear] = useState(new Date().getFullYear());
   const [dash, setDash] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [banks, setBanks] = useState([]);
   const [slipRec, setSlipRec] = useState(null);
   const [salPayFor, setSalPayFor] = useState(null);
   const [showNewSlip, setShowNewSlip] = useState(false);
@@ -843,6 +1078,10 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [expModal, setExpModal] = useState(null);
   const [showBell, setShowBell] = useState(false);
+  const [readIds, setReadIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("dh_read_notifs") || "[]")); }
+    catch { return new Set(); }
+  });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef(null);
   const [showSearch, setShowSearch] = useState(false);
@@ -865,6 +1104,7 @@ export default function App() {
     try { const st = await api.settings(); setSettings(st.settings); } catch { /* defaults are fine */ }
     try { const dc = await api.documents(); setDocs(dc.documents || []); } catch { /* module may not be migrated yet */ }
     try { const ex = await api.expenses(); setExpenses(ex.expenses || []); } catch { /* module may not be migrated yet */ }
+    try { const bk = await api.banks(); setBanks(bk.banks || []); } catch { /* module may not be migrated yet */ }
   };
 
   useEffect(() => {
@@ -897,6 +1137,9 @@ export default function App() {
     prefix:  settings?.invoice_prefix  || "INV",
     terms:   settings?.invoice_terms   || "Net 15",
     currency:settings?.invoice_currency|| "INR",
+    signatory:      settings?.signatory_name  || "",
+    signatoryTitle: settings?.signatory_title || "Founder & CEO",
+    conditions:     settings?.invoice_conditions || "",
   }), [settings]);
   const clientList = clients;
   const invoiceList = invoices;
@@ -913,6 +1156,15 @@ export default function App() {
     setPage(id); setActiveClient(null); setInvView({ mode: "list", inv: null });
     setActiveEmp(null); setSlipRec(null);
   };
+
+  // Keep the URL hash in step with whichever top-level section is showing,
+  // so a hard refresh (or a bookmarked/shared link) lands back on the same
+  // page instead of always resetting to the dashboard.
+  useEffect(() => {
+    if (window.location.hash.replace("#", "") !== page) {
+      window.history.replaceState(null, "", `#${page}`);
+    }
+  }, [page]);
 
   const navRef = React.useRef(null);
   useEffect(() => {
@@ -944,12 +1196,35 @@ export default function App() {
     () => buildNotifications({ invoices, payroll, employees, docs }),
     [invoices, payroll, employees, docs]);
 
+  const unreadCount = useMemo(
+    () => notifications.filter(n => !readIds.has(n.id)).length,
+    [notifications, readIds]);
+
+  const saveReadIds = (next) => {
+    setReadIds(next);
+    try { localStorage.setItem("dh_read_notifs", JSON.stringify([...next])); } catch { /* ignore */ }
+  };
+
+  const markNotifRead = (id) => {
+    if (readIds.has(id)) return;
+    saveReadIds(new Set([...readIds, id]));
+  };
+
+  const markAllNotifsRead = () => {
+    saveReadIds(new Set(notifications.map(n => n.id)));
+  };
+
   const goToRecord = ({ page: pg, ref }) => {
     goto(pg);
     if (pg === "clients") setActiveClient(ref);
     if (pg === "invoices") setInvView({ mode: "view", inv: ref });
     if (pg === "employees") setActiveEmp(ref);
     if (pg === "salary") setSlipRec(ref);
+  };
+
+  const openNotification = (n) => {
+    markNotifRead(n.id);
+    goToRecord(n);
   };
 
   const generateSlip = async (emp) => {
@@ -1146,14 +1421,14 @@ export default function App() {
               <button onClick={() => setShowBell(v => !v)} className="relative w-10 h-10 rounded-full flex items-center justify-center"
                 style={{ border: `1px solid ${c.border}`, color: c.inkSoft }}>
                 <Bell size={17} />
-                {notifications.length > 0 && (
+                {unreadCount > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
-                    style={{ background: A.red, width: 18, height: 18 }}>{notifications.length}</span>
+                    style={{ background: A.red, width: 18, height: 18 }}>{unreadCount}</span>
                 )}
               </button>
               {showBell && (
-                <NotificationPanel c={c} dark={dark} items={notifications}
-                  onClose={() => setShowBell(false)} onGo={goToRecord} />
+                <NotificationPanel c={c} dark={dark} items={notifications} readIds={readIds}
+                  onClose={() => setShowBell(false)} onOpen={openNotification} onMarkAllRead={markAllNotifsRead} />
               )}
             </div>
             <div className="dh-user relative items-center gap-2.5 pl-2.5" style={{ borderLeft: `1px solid ${c.border}` }} ref={userMenuRef}>
@@ -1199,26 +1474,48 @@ export default function App() {
           )}
           {page === "clients" && !activeClient && (
             <ClientsPage c={c} dark={dark} clients={clientList} onOpen={setActiveClient}
-              onNew={() => setShowClientForm(true)} />
+              onNew={() => setShowClientForm(true)}
+              onDelete={async (cl) => {
+                const r = await guard(() => api.archiveClient(cl.id), "Client removed.");
+                if (r) await loadAll();
+              }} />
           )}
           {page === "clients" && activeClient && (
             <ClientProfile c={c} dark={dark}
+              invoices={invoices} co={co} banks={banks}
               client={clients.find(x => x.id === activeClient.id) || activeClient}
               onBack={() => setActiveClient(null)}
               onEdit={() => setEditClient(clients.find(x => x.id === activeClient.id) || activeClient)}
               onAddContact={() => setAddContactFor(activeClient)}
+              onDelete={async (cl) => {
+                const r = await guard(() => api.archiveClient(cl.id), "Client removed.");
+                if (r) { setActiveClient(null); await loadAll(); }
+              }}
               onAddNote={async (text) => {
                 const r = await guard(() => api.addClientNote(activeClient.id, text), "Note added.");
+                if (r) await loadAll();
+              }}
+              onUploadDoc={async (file, name, cat) => {
+                const r = await guard(() => api.uploadDocument(file, name, cat, { clientId: activeClient.id }), "Document uploaded.");
+                if (r) await loadAll();
+              }}
+              onDeleteDoc={async (d) => {
+                if (!window.confirm(`Delete "${d.name}"? This removes the file permanently.`)) return;
+                const r = await guard(() => api.deleteDocument(d.id), "Document deleted.");
                 if (r) await loadAll();
               }} />
           )}
           {page === "invoices" && invView.mode === "list" && (
-            <InvoicesPage c={c} dark={dark} invoices={invoiceList}
+            <InvoicesPage c={c} dark={dark} invoices={invoiceList} clients={clients} co={co} banks={banks}
               onOpen={(i) => setInvView({ mode: "view", inv: i })}
-              onNew={() => setInvView({ mode: "edit", inv: null })} />
+              onNew={() => setInvView({ mode: "edit", inv: null })}
+              onDelete={async (inv) => {
+                const r = await guard(() => api.deleteInvoice(inv.id), "Invoice deleted.");
+                if (r) await loadAll();
+              }} />
           )}
           {page === "invoices" && invView.mode === "view" && invView.inv && (
-            <InvoiceView c={c} dark={dark} co={co}
+            <InvoiceView c={c} dark={dark} co={co} banks={banks}
               inv={invoices.find(i => i.id === invView.inv.id) || invView.inv}
               client={clients.find(x => x.id === invView.inv.clientId)}
               onBack={() => setInvView({ mode: "list", inv: null })}
@@ -1227,20 +1524,33 @@ export default function App() {
               onStatus={(s) => updateInvoice(invView.inv.id, { status: s })} />
           )}
           {page === "invoices" && invView.mode === "edit" && (
-            <InvoiceEditor c={c} dark={dark} co={co} invoice={invView.inv} clients={clients} invoices={invoices}
+            <InvoiceEditor c={c} dark={dark} co={co} invoice={invView.inv} clients={clients} invoices={invoices} banks={banks}
               onCancel={() => setInvView(invView.inv ? { mode: "view", inv: invView.inv } : { mode: "list", inv: null })}
               onSave={saveInvoice} />
           )}
           {page === "employees" && !activeEmp && (
             <EmployeesPage c={c} dark={dark} employees={employeeList}
-              onOpen={setActiveEmp} onNew={() => setShowEmpForm(true)} />
+              onOpen={setActiveEmp} onNew={() => setShowEmpForm(true)}
+              onDelete={async (emp) => {
+                const r = await guard(() => api.deleteEmployee(emp.id), "Employee removed.");
+                if (r) await loadAll();
+              }} />
           )}
           {page === "employees" && activeEmp && (
             <EmployeeProfile c={c} dark={dark}
               emp={employees.find(e => e.id === activeEmp.id) || activeEmp}
               payroll={payroll} onBack={() => setActiveEmp(null)}
               onEdit={() => setEditEmp(employees.find(e => e.id === activeEmp.id) || activeEmp)}
-              onOpenSlip={(r) => { setPage("salary"); setActiveEmp(null); setSlipRec(r); }} />
+              onOpenSlip={(r) => { setPage("salary"); setActiveEmp(null); setSlipRec(r); }}
+              onUploadDoc={async (file, name, cat) => {
+                const r = await guard(() => api.uploadDocument(file, name, cat, { empId: activeEmp.id }), "Document uploaded.");
+                if (r) await loadAll();
+              }}
+              onDeleteDoc={async (d) => {
+                if (!window.confirm(`Delete "${d.name}"? This removes the file permanently.`)) return;
+                const r = await guard(() => api.deleteDocument(d.id), "Document deleted.");
+                if (r) await loadAll();
+              }} />
           )}
           {page === "salary" && !slipRec && (
             <SalaryPage c={c} dark={dark} employees={employeeList} payroll={payrollList}
@@ -1275,7 +1585,15 @@ export default function App() {
               }} />
           )}
           {page === "settings" && (
-            <SettingsPage c={c} dark={dark} settings={settings} user={user}
+            <SettingsPage c={c} dark={dark} settings={settings} user={user} banks={banks}
+              onSaveBank={async (b) => {
+                const r = await guard(() => api.saveBank(b), "Bank account saved.");
+                if (r) { try { const bk = await api.banks(); setBanks(bk.banks || []); } catch {} }
+              }}
+              onDeleteBank={async (b) => {
+                const r = await guard(() => api.deleteBank(b.id), "Bank account deleted.");
+                if (r) { try { const bk = await api.banks(); setBanks(bk.banks || []); } catch {} }
+              }}
               onSave={async (f) => {
                 const r = await guard(() => api.saveSettings(f), "Settings saved.");
                 if (r) setSettings(r.settings);
@@ -1742,7 +2060,8 @@ function StatusPill({ status }) {
   );
 }
 
-function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
+function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew, onDelete }) {
+  const [confirmDel, setConfirmDel] = useState(null);
   const clients = rawClients.map(x => ({
     ...x,
     totalInvoices: Number(x.total_invoices ?? x.totalInvoices ?? 0),
@@ -1778,12 +2097,12 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
       <div className="dh-toolbar">
         <SearchBox c={c} placeholder="Search clients..." value={q} onChange={setQ} />
         <div style={{ display: "flex", gap: 10 }}>
-          <select value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
+          <Select c={c} value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
             {["All", "Active", "Inactive"].map(s => <option key={s}>{s}</option>)}
-          </select>
-          <select value={sort} onChange={e => setSort(e.target.value)} style={selectStyle}>
+          </Select>
+          <Select c={c} value={sort} onChange={e => setSort(e.target.value)} style={selectStyle}>
             {["Name", "Newest", "Outstanding"].map(s => <option key={s}>{s}</option>)}
-          </select>
+          </Select>
         </div>
       </div>
 
@@ -1816,7 +2135,12 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
                     <Td c={c} align="right">{inr(x.paid)}</Td>
                     <Td c={c} align="right" color={x.outstanding ? A.red : c.inkSoft}>{inr(x.outstanding)}</Td>
                     <Td c={c}><StatusPill status={x.status} /></Td>
-                    <Td c={c} align="right"><MoreHorizontal size={18} color={c.muted} /></Td>
+                    <Td c={c} align="right">
+                      <RowMenuButton c={c} size={18} items={[
+                        { label: "View", Icon: Eye, onClick: () => onOpen(x) },
+                        { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDel(x) },
+                      ]} />
+                    </Td>
                   </tr>
                 ))}
               </tbody>
@@ -1825,8 +2149,9 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
             {/* mobile cards */}
             <div className="dh-cards">
               {rows.map(x => (
-                <button key={x.id} onClick={() => onOpen(x)}
-                  style={{ width: "100%", textAlign: "left", padding: 16, borderBottom: `1px solid ${c.border}` }}>
+                <div key={x.id} style={{ position: "relative", borderBottom: `1px solid ${c.border}` }}>
+                <button onClick={() => onOpen(x)}
+                  style={{ width: "100%", textAlign: "left", padding: 16, paddingRight: 44 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
                     <div style={{ fontSize: 14.5, fontWeight: 600 }}>{x.company}</div>
                     <StatusPill status={x.status} />
@@ -1838,6 +2163,13 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
                     {x.outstanding > 0 && <span style={{ color: A.red }}>Due {inr(x.outstanding)}</span>}
                   </div>
                 </button>
+                <div style={{ position: "absolute", top: 14, right: 12 }}>
+                  <RowMenuButton c={c} style={{ padding: 6 }} items={[
+                    { label: "View", Icon: Eye, onClick: () => onOpen(x) },
+                    { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDel(x) },
+                  ]} />
+                </div>
+                </div>
               ))}
             </div>
 
@@ -1847,6 +2179,15 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
           </>
         )}
       </Card>
+
+      {confirmDel && (
+        <ConfirmModal c={c}
+          title="Delete client?"
+          message={`"${confirmDel.company}" will be removed from your client list. Past invoices stay intact for your records.`}
+          confirmLabel="Delete client"
+          onCancel={() => setConfirmDel(null)}
+          onConfirm={async () => { await onDelete(confirmDel); setConfirmDel(null); }} />
+      )}
     </div>
   );
 }
@@ -1855,7 +2196,10 @@ function ClientsPage({ c, dark, clients: rawClients, onOpen, onNew }) {
 
 const TABS = ["Overview", "Invoices", "Documents", "Contacts", "Notes", "Activity"];
 
-function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddContact }) {
+function ClientProfile({ c, dark, client: raw, invoices: allInvoices, co, banks, onBack, onEdit, onAddNote, onAddContact, onDelete, onUploadDoc, onDeleteDoc }) {
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [previewInv, setPreviewInv] = useState(null);
+  const [showUpload, setShowUpload] = useState(false);
   const client = {
     ...raw,
     totalInvoices: Number(raw.total_invoices ?? raw.totalInvoices ?? 0),
@@ -1873,9 +2217,9 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
       date: a.created_at ? new Date(a.created_at).toLocaleString("en-IN") : (a.date || ""),
     })),
     invoices: (raw.invoices || []).map(i => ({
-      no: i.no, date: fmtDate(i.invoice_date || i.date), due: fmtDate(i.due_date || i.due),
+      id: i.id, no: i.no, date: fmtDate(i.invoice_date || i.date), due: fmtDate(i.due_date || i.due),
       amt: Math.max(0, Number(i.subtotal || 0) - Number(i.discount || 0)),
-      status: i.status,
+      currency: i.currency || "INR", status: i.status,
     })),
     notesUpdated: "",
   };
@@ -1884,6 +2228,15 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
   const [invFilter, setInvFilter] = useState("All");
 
   const invoices = invFilter === "All" ? client.invoices : client.invoices.filter(i => i.status === invFilter);
+
+  const openInvoicePreview = (row) => {
+    const full = (allInvoices || []).find(x => x.id === row.id);
+    setPreviewInv(full || row);
+  };
+  const downloadInvoice = (row) => {
+    openInvoicePreview(row);
+    setTimeout(() => printWithTitle(row.no), 250);
+  };
 
   return (
     <div style={{ maxWidth: 1560, margin: "0 auto" }}>
@@ -1901,10 +2254,14 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
           }}>
             <Pencil size={15} /> Edit Client
           </button>
-          <button style={{
-            width: 42, borderRadius: 12, border: `1px solid ${c.border}`, background: c.card,
+          <div style={{
+            width: 42, height: 42, borderRadius: 12, border: `1px solid ${c.border}`, background: c.card,
             display: "flex", alignItems: "center", justifyContent: "center", color: c.inkSoft,
-          }}><MoreHorizontal size={18} /></button>
+          }}>
+            <RowMenuButton c={c} size={18} items={[
+              { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDel(client) },
+            ]} />
+          </div>
         </div>
       </div>
 
@@ -2036,7 +2393,8 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
                     }}>{f}</button>
                 ))}
               </div>
-              <InvoiceRows c={c} rows={invoices} showActions />
+              <InvoiceRows c={c} rows={invoices} showActions
+                onView={openInvoicePreview} onDownload={downloadInvoice} />
             </Card>
           )}
 
@@ -2044,24 +2402,31 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
             <Card c={c} style={{ padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>Documents</div>
-                <PrimaryBtn><Upload size={16} /> Upload Document</PrimaryBtn>
+                <PrimaryBtn onClick={() => setShowUpload(true)}><Upload size={16} /> Upload Document</PrimaryBtn>
               </div>
               {client.documents.length === 0 ? (
                 <Blank c={c} Icon={FolderClosed} title="No documents yet"
                   sub="Upload contracts, proposals or certificates for this client." />
               ) : client.documents.map(d => (
-                <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: `1px solid ${c.border}` }}>
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: `1px solid ${c.border}` }}>
                   <IconTile Icon={FileText} tone="red" size={38} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</div>
-                    <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>{d.size} · {d.date}</div>
+                    <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>{fileSize(d.size)} · {fmtDate(d.date)}</div>
                   </div>
                   <span style={{ background: A.indigoSoft, color: A.indigo, fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>{d.cat}</span>
-                  <button style={{ color: c.muted }}><Download size={17} /></button>
-                  <button style={{ color: c.muted }}><MoreHorizontal size={17} /></button>
+                  <a href={api.documentUrl(d.id)} target="_blank" rel="noopener noreferrer" style={{ color: c.muted, display: "flex" }}><Download size={17} /></a>
+                  <RowMenuButton c={c} items={[
+                    { label: "Delete", Icon: Trash2, danger: true, onClick: () => onDeleteDoc(d) },
+                  ]} />
                 </div>
               ))}
             </Card>
+          )}
+
+          {showUpload && (
+            <UploadModal c={c} dark={dark} onClose={() => setShowUpload(false)}
+              onSave={async ({ file, name, cat }) => { await onUploadDoc(file, name, cat); setShowUpload(false); }} />
           )}
 
           {tab === "Contacts" && (
@@ -2136,11 +2501,26 @@ function ClientProfile({ c, dark, client: raw, onBack, onEdit, onAddNote, onAddC
           )}
         </div>
       </div>
+
+      {previewInv && (
+        <InvoicePreviewModal c={c} dark={dark} co={co} banks={banks}
+          inv={previewInv} client={client}
+          onClose={() => setPreviewInv(null)} />
+      )}
+
+      {confirmDel && (
+        <ConfirmModal c={c}
+          title="Delete client?"
+          message={`"${confirmDel.company}" will be removed from your client list. Past invoices stay intact for your records.`}
+          confirmLabel="Delete client"
+          onCancel={() => setConfirmDel(null)}
+          onConfirm={async () => { await onDelete(confirmDel); setConfirmDel(null); }} />
+      )}
     </div>
   );
 }
 
-function InvoiceRows({ c, rows, showActions }) {
+function InvoiceRows({ c, rows, showActions, onView, onDownload }) {
   if (rows.length === 0) return <Blank c={c} Icon={FileText} title="No invoices" sub="Nothing matches this filter." />;
   return (
     <>
@@ -2157,14 +2537,22 @@ function InvoiceRows({ c, rows, showActions }) {
             <tr key={i.no} style={{ borderBottom: `1px solid ${c.border}` }}>
               <Td c={c} bold>{i.no}</Td>
               <Td c={c} color={c.inkSoft}>{i.date}</Td>
-              <Td c={c} align="right" bold>{inr(i.amt)}</Td>
+              <Td c={c} align="right" bold>{money(i.amt, i.currency)}</Td>
               <Td c={c}><Pill status={i.status} /></Td>
               <Td c={c} color={c.inkSoft}>{i.due}</Td>
               <Td c={c} align="right">
-                <span style={{ display: "inline-flex", gap: 14, color: c.muted }}>
-                  <Download size={17} />
-                  {showActions && <MoreHorizontal size={17} />}
-                </span>
+                {showActions ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 14, color: c.muted }}>
+                    <button onClick={() => onDownload(i)} style={{ color: c.muted, display: "inline-flex" }}>
+                      <Download size={17} />
+                    </button>
+                    <RowMenuButton c={c} items={[
+                      { label: "View", Icon: Eye, onClick: () => onView(i) },
+                    ]} />
+                  </span>
+                ) : (
+                  <Download size={17} color={c.muted} />
+                )}
               </Td>
             </tr>
           ))}
@@ -2178,9 +2566,17 @@ function InvoiceRows({ c, rows, showActions }) {
               <span style={{ fontSize: 14, fontWeight: 600 }}>{i.no}</span>
               <Pill status={i.status} />
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: c.muted }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, color: c.muted }}>
               <span>{i.date} · Due {i.due}</span>
-              <span style={{ fontSize: 14, fontWeight: 600, color: c.ink }}>{inr(i.amt)}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: c.ink }}>{money(i.amt, i.currency)}</span>
+                {showActions && (
+                  <RowMenuButton c={c} items={[
+                    { label: "View", Icon: Eye, onClick: () => onView(i) },
+                    { label: "Download", Icon: Download, onClick: () => onDownload(i) },
+                  ]} />
+                )}
+              </span>
             </div>
           </div>
         ))}
@@ -2243,13 +2639,13 @@ function ClientForm({ c, onClose, onSave, initial }) {
             <input style={input} value={f.service} onChange={set("service")} placeholder="e.g. Website maintenance & SEO" /></label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Client type
-              <select style={input} value={f.type} onChange={set("type")}>
+              <Select c={c} style={input} value={f.type} onChange={set("type")}>
                 {["Retainer", "Project", "One-time"].map(t => <option key={t}>{t}</option>)}
-              </select></label>
+              </Select></label>
             <label style={label}>Status
-              <select style={input} value={f.status} onChange={set("status")}>
+              <Select c={c} style={input} value={f.status} onChange={set("status")}>
                 {["Active", "Inactive"].map(t => <option key={t}>{t}</option>)}
-              </select></label>
+              </Select></label>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Start date<DateField c={c} value={f.since} onChange={(v) => setF({ ...f, since: v })} /></label>
@@ -2278,7 +2674,7 @@ function ClientForm({ c, onClose, onSave, initial }) {
 
 /* -------------------------------- invoices ------------------------------- */
 
-const INV_STATUSES = ["Draft", "Sent", "Pending", "Partially Paid", "Paid", "Overdue", "Cancelled"];
+const INV_STATUSES = ["Sent", "Pending", "Partially Paid", "Paid", "Overdue", "Cancelled"];
 
 function invPillStyle(status) {
   const map = {
@@ -2293,11 +2689,13 @@ function invPillStyle(status) {
 
 function InvPill({ status }) { return <span style={invPillStyle(status)}>{status}</span>; }
 
-function InvoicesPage({ c, dark, invoices, onOpen, onNew }) {
+function InvoicesPage({ c, dark, invoices, clients, co, banks, onOpen, onNew, onDelete }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("All Status");
   const [page, setPage] = useState(1);
   const perPage = 7;
+  const [previewInv, setPreviewInv] = useState(null);
+  const [confirmDeleteInv, setConfirmDeleteInv] = useState(null);
 
   const rows = useMemo(() => {
     return invoices.filter(i => {
@@ -2348,9 +2746,9 @@ function InvoicesPage({ c, dark, invoices, onOpen, onNew }) {
 
       <div className="dh-toolbar">
         <SearchBox c={c} placeholder="Search invoices..." value={q} onChange={v => { setQ(v); setPage(1); }} />
-        <select value={status} onChange={e => { setStatus(e.target.value); setPage(1); }} style={selectStyle}>
+        <Select c={c} value={status} onChange={e => { setStatus(e.target.value); setPage(1); }} style={selectStyle}>
           {["All Status", ...INV_STATUSES].map(s => <option key={s}>{s}</option>)}
-        </select>
+        </Select>
       </div>
 
       <Card c={c} style={{ overflow: "hidden" }}>
@@ -2377,8 +2775,12 @@ function InvoicesPage({ c, dark, invoices, onOpen, onNew }) {
                       <Td c={c} align="right" bold>{money(t.total, i.currency)}</Td>
                       <Td c={c}><InvPill status={i.status} /></Td>
                       <Td c={c} align="right">
-                        <span style={{ display: "inline-flex", gap: 14, color: c.muted }}>
-                          <Download size={17} /><MoreHorizontal size={17} />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 14, color: c.muted }}>
+                          <Download size={17} />
+                          <RowMenuButton c={c} items={[
+                            { label: "View", Icon: Eye, onClick: () => setPreviewInv(i) },
+                            { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDeleteInv(i) },
+                          ]} />
                         </span>
                       </Td>
                     </tr>
@@ -2391,18 +2793,26 @@ function InvoicesPage({ c, dark, invoices, onOpen, onNew }) {
               {shown.map(i => {
                 const t = invTotals(i);
                 return (
-                  <button key={i.id} onClick={() => onOpen(i)}
-                    style={{ width: "100%", textAlign: "left", padding: 16, borderBottom: `1px solid ${c.border}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-                      <span style={{ fontSize: 14.5, fontWeight: 600 }}>{i.no}</span>
-                      <InvPill status={i.status} />
+                  <div key={i.id} style={{ position: "relative", borderBottom: `1px solid ${c.border}` }}>
+                    <button onClick={() => onOpen(i)}
+                      style={{ width: "100%", textAlign: "left", padding: 16, paddingRight: 44 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                        <span style={{ fontSize: 14.5, fontWeight: 600 }}>{i.no}</span>
+                        <InvPill status={i.status} />
+                      </div>
+                      <div style={{ fontSize: 13, color: c.inkSoft, marginBottom: 8 }}>{i.client}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: c.muted }}>
+                        <span>{fmtDate(i.date)} · Due {fmtDate(i.due)}</span>
+                        <span style={{ fontSize: 14.5, fontWeight: 700, color: c.ink }}>{money(t.total, i.currency)}</span>
+                      </div>
+                    </button>
+                    <div style={{ position: "absolute", top: 14, right: 12 }}>
+                      <RowMenuButton c={c} style={{ padding: 6 }} items={[
+                        { label: "View", Icon: Eye, onClick: () => setPreviewInv(i) },
+                        { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDeleteInv(i) },
+                      ]} />
                     </div>
-                    <div style={{ fontSize: 13, color: c.inkSoft, marginBottom: 8 }}>{i.client}</div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: c.muted }}>
-                      <span>{fmtDate(i.date)} · Due {fmtDate(i.due)}</span>
-                      <span style={{ fontSize: 14.5, fontWeight: 700, color: c.ink }}>{money(t.total, i.currency)}</span>
-                    </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -2426,100 +2836,217 @@ function InvoicesPage({ c, dark, invoices, onOpen, onNew }) {
           </>
         )}
       </Card>
+
+      {previewInv && (
+        <InvoicePreviewModal c={c} dark={dark} co={co} banks={banks}
+          inv={invoices.find(x => x.id === previewInv.id) || previewInv}
+          client={clients?.find(x => x.id === previewInv.clientId)}
+          onClose={() => setPreviewInv(null)} />
+      )}
+      {confirmDeleteInv && (
+        <ConfirmModal c={c}
+          title="Delete invoice?"
+          message={`This will permanently delete invoice ${confirmDeleteInv.no}, along with its payment history. This cannot be undone.`}
+          onCancel={() => setConfirmDeleteInv(null)}
+          onConfirm={async () => { await onDelete(confirmDeleteInv); setConfirmDeleteInv(null); }} />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------- invoice row menu / modals ---------------------- */
+
+function InvoicePreviewModal({ c, dark, co, inv, client, banks, onClose }) {
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 55, background: "rgba(15,23,42,.55)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px", overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 720 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <button onClick={onClose}
+            style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(255,255,255,.15)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={18} />
+          </button>
+        </div>
+        <InvoiceDoc c={c} dark={dark} co={co} inv={inv} client={client} banks={banks} />
+      </div>
     </div>
   );
 }
 
 /* ---------------------------- invoice document --------------------------- */
 
-function InvoiceDoc({ c, dark, co = COMPANY, inv, client }) {
+/* Resolves which saved bank account an invoice should print. Falls back to
+   the default account, then to the older single "company_bank" text so
+   invoices created before multi-bank support still show payment details. */
+function resolveBank(inv, banks, co) {
+  const list = banks || [];
+  if (inv?.bankAccountId) {
+    const picked = list.find(b => b.id === Number(inv.bankAccountId));
+    if (picked) return picked;
+  }
+  const def = list.find(b => b.isDefault) || list[0];
+  if (def) return def;
+  return co?.bank ? { bankName: co.bank } : null;
+}
+
+function InvoiceDoc({ c, dark, co = COMPANY, inv, client, banks }) {
   const t = invTotals(inv);
   const cur = inv.currency || "INR";
-  const m = (n) => money(n, cur);
-  const line = { display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13.5 };
+  const m = (n) => moneyDecimal(n, cur);
+  const bank = resolveBank(inv, banks, co);
+
+  const INK = "#111827";
+  const SOFT = "#4B5563";
+  const RULE = "#D1D5DB";
+
+  const bankLines = bank ? [
+    ["Bank Name", bank.bankName],
+    ["Account Number", bank.accountNo],
+    ["IFSC Code", bank.ifsc],
+    ["Branch", bank.branch],
+    ["SWIFT", bank.swift],
+    [null, bank.extra],
+  ].filter(([, v]) => v) : [];
+
+  const conditions = (co.conditions || "").split("\n").filter(Boolean);
+
   return (
-    <div className="print-area" style={{ background: "#fff", color: "#0F172A", borderRadius: 16, border: `1px solid ${c.border}`, padding: 28 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{co.name}</div>
-          {co.tagline && <div style={{ fontSize: 11.5, color: "#64748B", marginTop: 3 }}>{co.tagline}</div>}
-          {co.address && <div style={{ fontSize: 11.5, color: "#64748B" }}>{co.address}</div>}
-          {co.gstin && <div style={{ fontSize: 11.5, color: "#64748B" }}>GSTIN: {co.gstin}</div>}
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>INVOICE</div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{inv.no}</div>
-          <div style={{ fontSize: 11.5, color: "#64748B", marginTop: 2 }}>Currency: {cur}</div>
-          <div style={{ marginTop: 8 }}><InvPill status={inv.status} /></div>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 20, flexWrap: "wrap", margin: "26px 0 18px" }}>
-        <div>
-          <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "#94A3B8", marginBottom: 6 }}>Bill to</div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{client?.company || inv.client}</div>
-          {client && <>
-            <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 2 }}>{client.contact}</div>
-            <div style={{ fontSize: 12.5, color: "#64748B", maxWidth: 260 }}>{client.address}</div>
-            <div style={{ fontSize: 12.5, color: "#64748B" }}>{client.email}</div>
-          </>}
-        </div>
-        <div style={{ fontSize: 12.5, color: "#64748B", textAlign: "right" }}>
-          <div>Invoice date: <b style={{ color: "#0F172A" }}>{fmtDate(inv.date)}</b></div>
-          <div>Due date: <b style={{ color: "#0F172A" }}>{fmtDate(inv.due)}</b></div>
-          <div>Terms: <b style={{ color: "#0F172A" }}>{inv.terms}</b></div>
+    <div className="print-area" style={{
+      background: "#fff", color: INK, borderRadius: 16,
+      border: `1px solid ${c.border}`, padding: 36, fontSize: 13,
+    }}>
+      {/* masthead */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 44, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1 }}>INVOICE</div>
+        <div style={{ textAlign: "right", lineHeight: 1.55 }}>
+          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: "-0.01em" }}>{co.name}</div>
+          {co.address && <div style={{ fontSize: 12.5, color: SOFT, maxWidth: 240 }}>{co.address}</div>}
+          {co.phone && <div style={{ fontSize: 12.5, color: SOFT }}>{co.phone}</div>}
+          {co.email && <div style={{ fontSize: 12.5, color: SOFT }}>{co.email}</div>}
+          {co.gstin && <div style={{ fontSize: 12.5, color: SOFT }}>GSTIN: {co.gstin}</div>}
         </div>
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}>
+      {/* billed to / invoice meta */}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 24, flexWrap: "wrap", marginTop: 34 }}>
+        <div style={{ lineHeight: 1.6 }}>
+          <div style={{ fontSize: 12.5, color: SOFT, marginBottom: 4 }}>Billed to:</div>
+          <div style={{ fontSize: 15.5, fontWeight: 700 }}>{client?.company || inv.client}</div>
+          {client?.contact && <div style={{ fontSize: 12.5, color: SOFT }}>{client.contact}</div>}
+          {client?.address && <div style={{ fontSize: 12.5, color: SOFT, maxWidth: 260 }}>{client.address}</div>}
+          {client?.email && <div style={{ fontSize: 12.5, color: SOFT }}>{client.email}</div>}
+          {client?.gstin && <div style={{ fontSize: 12.5, color: SOFT }}>GSTIN: {client.gstin}</div>}
+        </div>
+        <div style={{ textAlign: "right", fontSize: 12.5, color: SOFT, lineHeight: 1.9 }}>
+          <div>Invoice No. <b style={{ color: INK }}>{inv.no}</b></div>
+          <div>Date: <b style={{ color: INK }}>{fmtDate(inv.date)}</b></div>
+          <div>Due Date: <b style={{ color: INK }}>{fmtDate(inv.due)}</b></div>
+          <div>Terms: <b style={{ color: INK }}>{inv.terms}</b></div>
+          <div>Currency: <b style={{ color: INK }}>{cur}</b></div>
+        </div>
+      </div>
+
+      {/* line items */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 34 }}>
         <thead>
-          <tr style={{ borderBottom: "1px solid #E2E8F0" }}>
-            <th style={{ textAlign: "left", fontSize: 11, color: "#94A3B8", padding: "8px 0", fontWeight: 600 }}>DESCRIPTION</th>
-            <th style={{ textAlign: "right", fontSize: 11, color: "#94A3B8", padding: "8px 0", fontWeight: 600, width: 60 }}>QTY</th>
-            <th style={{ textAlign: "right", fontSize: 11, color: "#94A3B8", padding: "8px 0", fontWeight: 600, width: 90 }}>RATE</th>
-            <th style={{ textAlign: "right", fontSize: 11, color: "#94A3B8", padding: "8px 0", fontWeight: 600, width: 100 }}>AMOUNT</th>
+          <tr style={{ background: "#F3F4F6" }}>
+            <th style={{ textAlign: "left", fontSize: 12.5, fontWeight: 600, padding: "12px 14px" }}>Item</th>
+            <th style={{ textAlign: "right", fontSize: 12.5, fontWeight: 600, padding: "12px 14px", width: 90 }}>Quantity</th>
+            <th style={{ textAlign: "right", fontSize: 12.5, fontWeight: 600, padding: "12px 14px", width: 110 }}>Price</th>
+            <th style={{ textAlign: "right", fontSize: 12.5, fontWeight: 600, padding: "12px 14px", width: 120 }}>Amount</th>
           </tr>
         </thead>
         <tbody>
           {inv.items.map((it, n) => (
-            <tr key={n} style={{ borderBottom: "1px solid #F1F5F9" }}>
-              <td style={{ fontSize: 13.5, padding: "11px 0" }}>{it.desc || "—"}</td>
-              <td style={{ fontSize: 13.5, padding: "11px 0", textAlign: "right" }}>{it.qty}</td>
-              <td style={{ fontSize: 13.5, padding: "11px 0", textAlign: "right" }}>{m(it.rate)}</td>
-              <td style={{ fontSize: 13.5, padding: "11px 0", textAlign: "right", fontWeight: 600 }}>{m(it.qty * it.rate)}</td>
+            <tr key={n}>
+              <td style={{ fontSize: 13, padding: "13px 14px" }}>{it.desc || "—"}</td>
+              <td style={{ fontSize: 13, padding: "13px 14px", textAlign: "right" }}>{it.qty}</td>
+              <td style={{ fontSize: 13, padding: "13px 14px", textAlign: "right" }}>{m(it.rate)}</td>
+              <td style={{ fontSize: 13, padding: "13px 14px", textAlign: "right" }}>{m(it.qty * it.rate)}</td>
             </tr>
           ))}
         </tbody>
       </table>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-        <div style={{ width: 240 }}>
-          <div style={line}><span style={{ color: "#64748B" }}>Subtotal</span><span>{m(t.subtotal)}</span></div>
-          {t.discount > 0 && <div style={line}><span style={{ color: "#64748B" }}>Discount</span><span>– {m(t.discount)}</span></div>}
-          <div style={{ ...line, borderTop: "1px solid #E2E8F0", marginTop: 6, paddingTop: 12, fontSize: 16, fontWeight: 800 }}>
-            <span>Grand Total</span><span>{m(t.total)}</span>
+      {/* totals */}
+      <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 4 }}>
+        {t.discount > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "8px 14px", fontSize: 13 }}>
+            <span style={{ color: SOFT }}>Subtotal</span><span style={{ minWidth: 110, textAlign: "right" }}>{m(t.subtotal)}</span>
           </div>
-          {t.paid > 0 && <>
-            <div style={{ ...line, color: "#16A34A" }}><span>Paid</span><span>– {m(t.paid)}</span></div>
-            <div style={{ ...line, fontWeight: 700, color: t.due > 0 ? "#B4392F" : "#16A34A" }}>
-              <span>Balance due</span><span>{m(t.due)}</span>
-            </div>
-          </>}
+        )}
+        {t.discount > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "8px 14px", fontSize: 13 }}>
+            <span style={{ color: SOFT }}>Discount</span><span style={{ minWidth: 110, textAlign: "right" }}>– {m(t.discount)}</span>
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "14px", fontSize: 16, fontWeight: 800 }}>
+          <span>Total</span><span style={{ minWidth: 110, textAlign: "right" }}>{m(t.total)}</span>
         </div>
+        {t.paid > 0 && (
+          <>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "6px 14px", fontSize: 13, color: "#16A34A" }}>
+              <span>Paid</span><span style={{ minWidth: 110, textAlign: "right" }}>– {m(t.paid)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "6px 14px 14px", fontSize: 14, fontWeight: 700, color: t.due > 0 ? "#B4392F" : "#16A34A" }}>
+              <span>Balance due</span><span style={{ minWidth: 110, textAlign: "right" }}>{m(t.due)}</span>
+            </div>
+          </>
+        )}
       </div>
 
-      <div style={{ marginTop: 22, paddingTop: 16, borderTop: "1px solid #E2E8F0", fontSize: 12, color: "#64748B" }}>
-        {(inv.notes || co.footer) && <div style={{ marginBottom: 8 }}>{inv.notes || co.footer}</div>}
-        {co.bank && <div><b style={{ color: "#0F172A" }}>Payment details:</b> {co.bank}</div>}
-        <div style={{ marginTop: 4 }}>{[co.email, co.phone, co.website].filter(Boolean).join(" · ")}</div>
+      {/* payment method + signature */}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 30, flexWrap: "wrap", marginTop: 40 }}>
+        <div style={{ minWidth: 240 }}>
+          {bankLines.length > 0 && (
+            <>
+              <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 10 }}>Payment Method</div>
+              <div style={{ lineHeight: 2 }}>
+                {bankLines.map(([label, val], i) => (
+                  <div key={i} style={{ fontSize: 12.5, color: SOFT }}>
+                    {label ? <>{label} : <span style={{ color: INK }}>{val}</span></> : <span style={{ color: INK }}>{val}</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {(co.signatory || co.signatoryTitle) && (
+          <div style={{ textAlign: "center", minWidth: 200, alignSelf: "flex-end" }}>
+            <div style={{ borderTop: `1px solid ${RULE}`, paddingTop: 8, marginTop: 40 }}>
+              {co.signatory && <div style={{ fontSize: 14.5, fontWeight: 700 }}>{co.signatory}</div>}
+              {co.signatoryTitle && <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", marginTop: 2 }}>{co.signatoryTitle}</div>}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* terms + notes */}
+      {(conditions.length > 0 || inv.notes || co.footer) && (
+        <div style={{ marginTop: 34 }}>
+          {conditions.length > 0 && (
+            <>
+              <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>Term and Conditions :</div>
+              {conditions.map((l, i) => (
+                <div key={i} style={{ fontSize: 12, color: SOFT, lineHeight: 1.7 }}>{l}</div>
+              ))}
+            </>
+          )}
+          {(inv.notes || co.footer) && (
+            <div style={{ fontSize: 12, color: SOFT, marginTop: conditions.length ? 12 : 0 }}>
+              {inv.notes || co.footer}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ------------------------------ invoice view ----------------------------- */
 
-function InvoiceView({ c, dark, co, inv, client, onBack, onEdit, onPayment, onStatus }) {
+function InvoiceView({ c, dark, co, inv, client, banks, onBack, onEdit, onPayment, onStatus }) {
   const t = invTotals(inv);
   const m = (n) => money(n, inv.currency);
   const btn = {
@@ -2537,7 +3064,7 @@ function InvoiceView({ c, dark, co, inv, client, onBack, onEdit, onPayment, onSt
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button style={btn} onClick={onEdit}><Pencil size={15} /> Edit</button>
-          <button style={btn} onClick={() => window.print()}><Download size={15} /> Download PDF</button>
+          <button style={btn} onClick={() => printWithTitle(inv.no)}><Download size={15} /> Download PDF</button>
           {inv.status !== "Paid" && inv.status !== "Cancelled" && (
             <PrimaryBtn onClick={onPayment}><Wallet size={16} /> Record Payment</PrimaryBtn>
           )}
@@ -2545,7 +3072,7 @@ function InvoiceView({ c, dark, co, inv, client, onBack, onEdit, onPayment, onSt
       </div>
 
       <div className="dh-editor">
-        <InvoiceDoc c={c} dark={dark} co={co} inv={inv} client={client} />
+        <InvoiceDoc c={c} dark={dark} co={co} inv={inv} client={client} banks={banks} />
 
         <div className="no-print">
           <Card c={c} style={{ padding: 20, marginBottom: 16 }}>
@@ -2566,17 +3093,26 @@ function InvoiceView({ c, dark, co, inv, client, onBack, onEdit, onPayment, onSt
 
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 12.5, color: c.inkSoft, marginBottom: 8 }}>Change status</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {["Draft", "Sent", "Pending", "Overdue", "Cancelled"].map(s => (
-                  <button key={s} onClick={() => onStatus(s)}
-                    style={{
-                      fontSize: 12, fontWeight: 500, padding: "6px 12px", borderRadius: 999,
-                      border: `1px solid ${inv.status === s ? A.indigo : c.border}`,
-                      background: inv.status === s ? A.indigoSoft : c.card,
-                      color: inv.status === s ? A.indigo : c.inkSoft,
-                    }}>{s}</button>
-                ))}
-              </div>
+              {inv.status === "Paid" ? (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: 12, borderRadius: 12, background: dark ? "#0F2A1E" : A.greenSoft }}>
+                  <CheckCircle2 size={16} color={A.green} style={{ marginTop: 1, flexShrink: 0 }} />
+                  <div style={{ fontSize: 12.5, color: A.green, lineHeight: 1.5 }}>
+                    This invoice is fully paid, so its status is locked. To reopen it, correct the payment history instead.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {["Sent", "Pending", "Overdue", "Cancelled"].map(s => (
+                    <button key={s} onClick={() => onStatus(s)}
+                      style={{
+                        fontSize: 12, fontWeight: 500, padding: "6px 12px", borderRadius: 999,
+                        border: `1px solid ${inv.status === s ? A.indigo : c.border}`,
+                        background: inv.status === s ? A.indigoSoft : c.card,
+                        color: inv.status === s ? A.indigo : c.inkSoft,
+                      }}>{s}</button>
+                  ))}
+                </div>
+              )}
             </div>
           </Card>
 
@@ -2604,7 +3140,7 @@ function InvoiceView({ c, dark, co, inv, client, onBack, onEdit, onPayment, onSt
 
 /* ----------------------------- invoice editor ---------------------------- */
 
-function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSave }) {
+function InvoiceEditor({ c, dark, co, invoice, clients, invoices, banks, onCancel, onSave }) {
   const isNew = !invoice;
   const todayISO = new Date().toISOString().slice(0, 10);
 
@@ -2621,7 +3157,8 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
   const [f, setF] = useState(invoice ? { ...invoice, items: invoice.items.map(i => ({ ...i })) } : {
     id: 0, no: nextNo(), clientId: clients[0]?.id || 0, client: clients[0]?.company || "",
     date: todayISO, terms: co.terms, due: addDaysISO(todayISO, TERMS[co.terms] ?? 15),
-    currency: co.currency, discount: 0, status: "Draft", notes: "",
+    currency: co.currency, discount: 0, status: "Pending", notes: "",
+    bankAccountId: (banks || []).find(b => b.isDefault)?.id || (banks || [])[0]?.id || 0,
     items: [{ desc: "", qty: 1, rate: 0 }], payments: [],
   });
 
@@ -2676,7 +3213,7 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Invoice details</div>
 
           <label style={label}>Client
-            <select style={input} value={f.clientId}
+            <Select c={c} style={input} value={f.clientId}
               onChange={e => {
                 const id = Number(e.target.value);
                 const cl = clients.find(x => x.id === id);
@@ -2684,7 +3221,7 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
               }}>
               {clients.length === 0 && <option>Add a client first</option>}
               {clients.map(x => <option key={x.id} value={x.id}>{x.company}</option>)}
-            </select>
+            </Select>
           </label>
 
           {client && (
@@ -2697,9 +3234,9 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Invoice number<input style={input} value={f.no} onChange={e => setF({ ...f, no: e.target.value })} /></label>
             <label style={label}>Payment terms
-              <select style={input} value={f.terms} onChange={e => setDateAndTerms(f.date, e.target.value)}>
+              <Select c={c} style={input} value={f.terms} onChange={e => setDateAndTerms(f.date, e.target.value)}>
                 {Object.keys(TERMS).map(k => <option key={k}>{k}</option>)}
-              </select>
+              </Select>
             </label>
             <label style={label}>Invoice date
               <DateField c={c} value={f.date} onChange={(v) => setDateAndTerms(v, f.terms)} />
@@ -2726,9 +3263,9 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Currency
-              <select style={input} value={f.currency || "INR"} onChange={e => setF({ ...f, currency: e.target.value })}>
+              <Select c={c} style={input} value={f.currency || "INR"} onChange={e => setF({ ...f, currency: e.target.value })}>
                 {Object.keys(CURRENCIES).map(k => <option key={k} value={k}>{CURRENCIES[k].label}</option>)}
-              </select>
+              </Select>
             </label>
             <label style={label}>Discount ({CURRENCIES[f.currency || "INR"].sym})
               <input type="number" style={input} value={f.discount} onChange={e => setF({ ...f, discount: Number(e.target.value) })} /></label>
@@ -2738,10 +3275,20 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
             <textarea rows={2} style={{ ...input, resize: "vertical" }} value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} />
           </label>
 
+          {(banks || []).length > 0 && (
+            <label style={label}>Bank account shown on this invoice
+              <Select c={c} style={input} value={f.bankAccountId || ""} onChange={e => setF({ ...f, bankAccountId: Number(e.target.value) })}>
+                {(banks || []).map(b => (
+                  <option key={b.id} value={b.id}>{b.label}{b.isDefault ? " (default)" : ""}</option>
+                ))}
+              </Select>
+            </label>
+          )}
+
           <label style={label}>Status
-            <select style={input} value={f.status} onChange={e => setF({ ...f, status: e.target.value })}>
+            <Select c={c} style={input} value={f.status} onChange={e => setF({ ...f, status: e.target.value })}>
               {INV_STATUSES.map(s => <option key={s}>{s}</option>)}
-            </select>
+            </Select>
           </label>
 
           <div style={{ borderTop: `1px solid ${c.border}`, marginTop: 8, paddingTop: 14 }}>
@@ -2751,7 +3298,7 @@ function InvoiceEditor({ c, dark, co, invoice, clients, invoices, onCancel, onSa
           </div>
         </Card>
 
-        <InvoiceDoc c={c} dark={dark} co={co} inv={f} client={client} />
+        <InvoiceDoc c={c} dark={dark} co={co} inv={f} client={client} banks={banks} />
       </div>
     </div>
   );
@@ -2796,9 +3343,9 @@ function PaymentModal({ c, inv, onClose, onSave }) {
           <label style={label}>Payment date
             <DateField c={c} value={f.date} onChange={(v) => setF({ ...f, date: v })} /></label>
           <label style={label}>Payment method
-            <select style={input} value={f.method} onChange={e => setF({ ...f, method: e.target.value })}>
+            <Select c={c} style={input} value={f.method} onChange={e => setF({ ...f, method: e.target.value })}>
               {["Bank Transfer", "UPI", "Cash", "Cheque", "Card", "Other"].map(m => <option key={m}>{m}</option>)}
-            </select></label>
+            </Select></label>
           <label style={label}>Transaction ID / Reference
             <input style={input} value={f.ref} onChange={e => setF({ ...f, ref: e.target.value })} /></label>
           <label style={label}>Notes (optional)
@@ -2836,7 +3383,8 @@ function Avatar({ name, size = 38 }) {
   );
 }
 
-function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
+function EmployeesPage({ c, dark, employees, onOpen, onNew, onDelete }) {
+  const [confirmDel, setConfirmDel] = useState(null);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("All");
 
@@ -2857,9 +3405,9 @@ function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
 
       <div className="dh-toolbar">
         <SearchBox c={c} placeholder="Search employees..." value={q} onChange={setQ} />
-        <select value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
+        <Select c={c} value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
           {["All", "Active", "Inactive"].map(s => <option key={s}>{s}</option>)}
-        </select>
+        </Select>
       </div>
 
       <Card c={c} style={{ overflow: "hidden" }}>
@@ -2894,7 +3442,11 @@ function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
                     <Td c={c} color={c.inkSoft}>{fmtDate(e.joinDate || e.join_date)}</Td>
                     <Td c={c} align="right">
                       <span style={{ display: "inline-flex", gap: 14, color: c.muted }}>
-                        <Pencil size={16} /><MoreHorizontal size={17} />
+                        <Pencil size={16} />
+                        <RowMenuButton c={c} items={[
+                          { label: "View", Icon: Eye, onClick: () => onOpen(e) },
+                          { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDel(e) },
+                        ]} />
                       </span>
                     </Td>
                   </tr>
@@ -2904,8 +3456,9 @@ function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
 
             <div className="dh-cards">
               {rows.map(e => (
-                <button key={e.id} onClick={() => onOpen(e)}
-                  style={{ width: "100%", textAlign: "left", padding: 16, borderBottom: `1px solid ${c.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+                <div key={e.id} style={{ position: "relative", borderBottom: `1px solid ${c.border}` }}>
+                <button onClick={() => onOpen(e)}
+                  style={{ width: "100%", textAlign: "left", padding: 16, paddingRight: 44, display: "flex", gap: 12, alignItems: "center" }}>
                   <Avatar name={e.name} size={42} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -2916,6 +3469,13 @@ function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
                     <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 5 }}>{inr(e.salary)}<span style={{ fontSize: 12, fontWeight: 400, color: c.muted }}>/mo</span></div>
                   </div>
                 </button>
+                <div style={{ position: "absolute", top: 14, right: 12 }}>
+                  <RowMenuButton c={c} style={{ padding: 6 }} items={[
+                    { label: "View", Icon: Eye, onClick: () => onOpen(e) },
+                    { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmDel(e) },
+                  ]} />
+                </div>
+                </div>
               ))}
             </div>
 
@@ -2925,14 +3485,24 @@ function EmployeesPage({ c, dark, employees, onOpen, onNew }) {
           </>
         )}
       </Card>
+
+      {confirmDel && (
+        <ConfirmModal c={c}
+          title="Delete employee?"
+          message={`${confirmDel.name} will be permanently removed. Salary slips already generated stay in your records.`}
+          confirmLabel="Delete employee"
+          onCancel={() => setConfirmDel(null)}
+          onConfirm={async () => { await onDelete(confirmDel); setConfirmDel(null); }} />
+      )}
     </div>
   );
 }
 
 const EMP_TABS = ["Overview", "Salary History", "Salary Slips", "Documents", "Notes"];
 
-function EmployeeProfile({ c, dark, emp, payroll, onBack, onOpenSlip, onEdit }) {
+function EmployeeProfile({ c, dark, emp, payroll, onBack, onOpenSlip, onEdit, onUploadDoc, onDeleteDoc }) {
   const [tab, setTab] = useState("Overview");
+  const [showUpload, setShowUpload] = useState(false);
   const slips = payroll.filter(r => r.empId === emp.id).sort((a, b) => (b.year * 12 + b.month) - (a.year * 12 + a.month));
 
   return (
@@ -3070,22 +3640,30 @@ function EmployeeProfile({ c, dark, emp, payroll, onBack, onOpenSlip, onEdit }) 
             <Card c={c} style={{ padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>Documents</div>
-                <PrimaryBtn><Upload size={16} /> Upload Document</PrimaryBtn>
+                <PrimaryBtn onClick={() => setShowUpload(true)}><Upload size={16} /> Upload Document</PrimaryBtn>
               </div>
               {(emp.documents || []).length === 0 ? (
                 <Blank c={c} Icon={FolderClosed} title="No documents yet" sub="Offer letter, ID proof, agreements." />
               ) : (emp.documents || []).map(d => (
-                <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: `1px solid ${c.border}` }}>
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: `1px solid ${c.border}` }}>
                   <IconTile Icon={FileText} tone="red" size={38} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 600 }}>{d.name}</div>
-                    <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>{d.size} · {d.date}</div>
+                    <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>{fileSize(d.size)} · {fmtDate(d.date)}</div>
                   </div>
                   <span style={{ background: A.indigoSoft, color: A.indigo, fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 999 }}>{d.cat}</span>
-                  <button style={{ color: c.muted }}><Download size={17} /></button>
+                  <a href={api.documentUrl(d.id)} target="_blank" rel="noopener noreferrer" style={{ color: c.muted, display: "flex" }}><Download size={17} /></a>
+                  <RowMenuButton c={c} items={[
+                    { label: "Delete", Icon: Trash2, danger: true, onClick: () => onDeleteDoc(d) },
+                  ]} />
                 </div>
               ))}
             </Card>
+          )}
+
+          {showUpload && (
+            <UploadModal c={c} dark={dark} onClose={() => setShowUpload(false)}
+              onSave={async ({ file, name, cat }) => { await onUploadDoc(file, name, cat); setShowUpload(false); }} />
           )}
 
           {tab === "Notes" && (
@@ -3138,11 +3716,11 @@ function EmployeeForm({ c, onClose, onSave, initial }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Role<input style={input} value={f.role} onChange={set("role")} /></label>
             <label style={label}>Department
-              <select style={input} value={f.dept} onChange={set("dept")}>{DEPTS.map(d => <option key={d}>{d}</option>)}</select>
+              <Select c={c} style={input} value={f.dept} onChange={set("dept")}>{DEPTS.map(d => <option key={d}>{d}</option>)}</Select>
             </label>
             <label style={label}>Joining date<DateField c={c} value={f.joinDate} onChange={(v) => setF({ ...f, joinDate: v })} /></label>
             <label style={label}>Status
-              <select style={input} value={f.status} onChange={set("status")}>{["Active", "Inactive"].map(x => <option key={x}>{x}</option>)}</select>
+              <Select c={c} style={input} value={f.status} onChange={set("status")}>{["Active", "Inactive"].map(x => <option key={x}>{x}</option>)}</Select>
             </label>
           </div>
 
@@ -3150,7 +3728,7 @@ function EmployeeForm({ c, onClose, onSave, initial }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Monthly salary (₹)<input type="number" style={input} value={f.salary} onChange={set("salary")} /></label>
             <label style={label}>Salary type
-              <select style={input} value={f.salaryType} onChange={set("salaryType")}>{["Monthly", "Hourly", "Contract"].map(x => <option key={x}>{x}</option>)}</select>
+              <Select c={c} style={input} value={f.salaryType} onChange={set("salaryType")}>{["Monthly", "Hourly", "Contract"].map(x => <option key={x}>{x}</option>)}</Select>
             </label>
             <label style={label}>Payment date (day)<input type="number" style={input} value={f.payDate} onChange={set("payDate")} /></label>
             <label style={label}>Bank (optional)<input style={input} value={f.bank} onChange={set("bank")} /></label>
@@ -3193,12 +3771,12 @@ function SalaryPage({ c, dark, employees, payroll, month, year, setMonth, setYea
       <PageHead c={c} title="Salary" sub="Run monthly payroll and generate salary slips."
         action={
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select value={month} onChange={e => setMonth(Number(e.target.value))} style={selectStyle}>
+            <Select c={c} value={month} onChange={e => setMonth(Number(e.target.value))} style={selectStyle}>
               {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-            </select>
-            <select value={year} onChange={e => setYear(Number(e.target.value))} style={selectStyle}>
+            </Select>
+            <Select c={c} value={year} onChange={e => setYear(Number(e.target.value))} style={selectStyle}>
               {[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
+            </Select>
             <PrimaryBtn onClick={onNewSlip}><Plus size={17} /> New Salary Slip</PrimaryBtn>
           </div>
         } />
@@ -3367,7 +3945,7 @@ function SlipView({ c, dark, co, rec, emp, onBack, onSave, onMarkPaid }) {
           <span style={{ fontWeight: 600 }}>{emp?.name} · {MONTHS[f.month - 1]} {f.year}</span>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => window.print()} style={{
+          <button onClick={() => printWithTitle(slipNo(f))} style={{
             display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600,
             padding: "10px 16px", borderRadius: 12, border: `1px solid ${c.border}`, background: c.card, color: c.ink,
           }}><Download size={15} /> Download PDF</button>
@@ -3435,9 +4013,9 @@ function SalaryPayModal({ c, rec, emp, onClose, onSave }) {
           </div>
           <label style={label}>Payment date<DateField c={c} value={f.paidOn} onChange={(v) => setF({ ...f, paidOn: v })} /></label>
           <label style={label}>Method
-            <select style={input} value={f.method} onChange={e => setF({ ...f, method: e.target.value })}>
+            <Select c={c} style={input} value={f.method} onChange={e => setF({ ...f, method: e.target.value })}>
               {["Bank Transfer", "UPI", "Cash", "Cheque"].map(m => <option key={m}>{m}</option>)}
-            </select></label>
+            </Select></label>
           <label style={label}>Reference<input style={input} value={f.ref} onChange={e => setF({ ...f, ref: e.target.value })} /></label>
           <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
             <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: `1px solid ${c.border}`, background: c.card, color: c.ink, fontSize: 14, fontWeight: 600 }}>Cancel</button>
@@ -3476,7 +4054,7 @@ function NewSlipModal({ c, employees, payroll, defMonth, defYear, onClose, onCre
 
         <div style={{ padding: 22 }}>
           <label style={label}>Employee
-            <select style={input} value={f.empId}
+            <Select c={c} style={input} value={f.empId}
               onChange={e => {
                 const id = Number(e.target.value);
                 const em = employees.find(x => x.id === id);
@@ -3486,19 +4064,19 @@ function NewSlipModal({ c, employees, payroll, defMonth, defYear, onClose, onCre
               {employees.map(e => (
                 <option key={e.id} value={e.id}>{e.name} — {e.role}{e.status === "Inactive" ? " (Inactive)" : ""}</option>
               ))}
-            </select>
+            </Select>
           </label>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label style={label}>Month
-              <select style={input} value={f.month} onChange={e => setF({ ...f, month: Number(e.target.value) })}>
+              <Select c={c} style={input} value={f.month} onChange={e => setF({ ...f, month: Number(e.target.value) })}>
                 {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-              </select>
+              </Select>
             </label>
             <label style={label}>Year
-              <select style={input} value={f.year} onChange={e => setF({ ...f, year: Number(e.target.value) })}>
+              <Select c={c} style={input} value={f.year} onChange={e => setF({ ...f, year: Number(e.target.value) })}>
                 {[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
+              </Select>
             </label>
           </div>
 
@@ -3562,7 +4140,72 @@ function NewSlipModal({ c, employees, payroll, defMonth, defYear, onClose, onCre
 
 /* -------------------------------- settings ------------------------------- */
 
-function SettingsPage({ c, dark, settings, onSave, onChangePassword, user }) {
+function BankModal({ c, bank, onClose, onSave }) {
+  const [f, setF] = useState(bank || {
+    label: "", bankName: "", accountNo: "", ifsc: "", branch: "", swift: "", extra: "", isDefault: false,
+  });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const label = { fontSize: 12.5, fontWeight: 500, color: c.inkSoft, display: "block", marginBottom: 6 };
+  const input = {
+    width: "100%", boxSizing: "border-box", fontSize: 15, padding: "10px 12px", borderRadius: 10,
+    border: `1px solid ${c.border}`, background: c.card, color: c.ink, outline: "none",
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 220, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: c.card, borderRadius: 18, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ position: "sticky", top: 0, background: c.card, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 22px", borderBottom: `1px solid ${c.border}` }}>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{bank ? "Edit Bank Account" : "Add Bank Account"}</div>
+          <button onClick={onClose} style={{ color: c.muted }}><X size={19} /></button>
+        </div>
+
+        <div style={{ padding: 22 }}>
+          <label style={label}>Account name (only you see this)
+            <input style={input} value={f.label} onChange={set("label")} placeholder="Indian clients / Foreign clients" autoFocus />
+          </label>
+          <label style={label}>Bank name
+            <input style={input} value={f.bankName || ""} onChange={set("bankName")} placeholder="HDFC Bank" />
+          </label>
+          <label style={label}>Account number
+            <input style={input} value={f.accountNo || ""} onChange={set("accountNo")} />
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <label style={label}>IFSC code
+              <input style={input} value={f.ifsc || ""} onChange={set("ifsc")} />
+            </label>
+            <label style={label}>Branch
+              <input style={input} value={f.branch || ""} onChange={set("branch")} />
+            </label>
+          </div>
+          <label style={label}>SWIFT / BIC (for foreign transfers)
+            <input style={input} value={f.swift || ""} onChange={set("swift")} />
+          </label>
+          <label style={label}>Anything else (optional)
+            <input style={input} value={f.extra || ""} onChange={set("extra")} placeholder="Paypal: you@example.com" />
+          </label>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!f.isDefault} onChange={e => setF({ ...f, isDefault: e.target.checked })} />
+            <span style={{ fontSize: 13.5 }}>Use this account by default on new invoices</span>
+          </label>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: `1px solid ${c.border}`, background: c.card, color: c.ink, fontSize: 14, fontWeight: 600 }}>Cancel</button>
+            <button onClick={() => f.label.trim() && onSave(f)}
+              style={{ flex: 1, padding: 12, borderRadius: 12, background: f.label.trim() ? A.orange : c.muted, color: "#fff", fontSize: 14, fontWeight: 600, cursor: f.label.trim() ? "pointer" : "not-allowed" }}>
+              {bank ? "Save changes" : "Add account"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ c, dark, settings, banks, onSaveBank, onDeleteBank, onSave, onChangePassword, user }) {
+  const [bankModal, setBankModal] = useState(null);
+  const [confirmBank, setConfirmBank] = useState(null);
   const [f, setF] = useState(settings || {});
   const [dirty, setDirty] = useState(false);
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
@@ -3629,14 +4272,14 @@ function SettingsPage({ c, dark, settings, onSave, onChangePassword, user }) {
             <input style={input} value={f.invoice_prefix || ""} onChange={set("invoice_prefix")} placeholder="INV" />
           </label>
           <label style={label}>Default payment terms
-            <select style={input} value={f.invoice_terms || "Net 15"} onChange={set("invoice_terms")}>
+            <Select c={c} style={input} value={f.invoice_terms || "Net 15"} onChange={set("invoice_terms")}>
               {Object.keys(TERMS).map(k => <option key={k}>{k}</option>)}
-            </select>
+            </Select>
           </label>
           <label style={label}>Default currency
-            <select style={input} value={f.invoice_currency || "INR"} onChange={set("invoice_currency")}>
+            <Select c={c} style={input} value={f.invoice_currency || "INR"} onChange={set("invoice_currency")}>
               {Object.keys(CURRENCIES).map(k => <option key={k} value={k}>{CURRENCIES[k].label}</option>)}
-            </select>
+            </Select>
           </label>
           <label style={label}>Default salary date (day)
             <input type="number" min="1" max="31" style={input} value={f.salary_pay_date || 20} onChange={set("salary_pay_date")} />
@@ -3651,7 +4294,70 @@ function SettingsPage({ c, dark, settings, onSave, onChangePassword, user }) {
             {(f.invoice_prefix || "INV").toUpperCase()}-{new Date().getFullYear()}-001
           </b>. Changing the prefix doesn't renumber past invoices.
         </div>
+
+        <div style={{ ...grid2, marginTop: 16 }}>
+          <label style={label}>Signature name
+            <input style={input} value={f.signatory_name || ""} onChange={set("signatory_name")} placeholder="Deepak Kumar" />
+          </label>
+          <label style={label}>Signature title
+            <input style={input} value={f.signatory_title || ""} onChange={set("signatory_title")} placeholder="Founder & CEO" />
+          </label>
+        </div>
+        <label style={label}>Terms &amp; conditions
+          <textarea rows={3} style={{ ...input, resize: "vertical" }} value={f.invoice_conditions || ""} onChange={set("invoice_conditions")}
+            placeholder={"Please send payment within 30 days of receiving this invoice.\nThere will be 10% interest charge per month on late invoice."} />
+        </label>
+        <div style={{ fontSize: 12, color: c.muted, marginTop: -4 }}>Each line prints as its own line on the invoice.</div>
       </Card>
+
+      <Card c={c} style={{ padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Bank Accounts</div>
+          <PrimaryBtn onClick={() => setBankModal({})}><Plus size={16} /> Add Account</PrimaryBtn>
+        </div>
+        <div style={{ fontSize: 12.5, color: c.muted, marginBottom: 16 }}>
+          Save as many accounts as you need, then pick one while creating each invoice —
+          handy when foreign and Indian clients pay into different accounts.
+        </div>
+
+        {(banks || []).length === 0 ? (
+          <Blank c={c} Icon={Wallet} title="No accounts yet"
+            sub="Add your first account so invoices can show payment details." />
+        ) : (banks || []).map(b => (
+          <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: `1px solid ${c.border}` }}>
+            <IconTile Icon={Wallet} tone="green" size={38} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                {b.label}
+                {b.isDefault && (
+                  <span style={{ background: A.greenSoft, color: A.green, fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999, marginLeft: 8 }}>Default</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>
+                {[b.bankName, b.accountNo, b.ifsc].filter(Boolean).join(" · ") || "No details yet"}
+              </div>
+            </div>
+            <button onClick={() => setBankModal(b)} style={{ color: c.muted, display: "flex" }}><Pencil size={16} /></button>
+            <RowMenuButton c={c} items={[
+              { label: "Delete", Icon: Trash2, danger: true, onClick: () => setConfirmBank(b) },
+            ]} />
+          </div>
+        ))}
+      </Card>
+
+      {bankModal && (
+        <BankModal c={c} bank={bankModal.id ? bankModal : null}
+          onClose={() => setBankModal(null)}
+          onSave={async (b) => { await onSaveBank(b); setBankModal(null); }} />
+      )}
+      {confirmBank && (
+        <ConfirmModal c={c}
+          title="Delete bank account?"
+          message={`"${confirmBank.label}" will be removed. Invoices that used it will fall back to your default account.`}
+          confirmLabel="Delete account"
+          onCancel={() => setConfirmBank(null)}
+          onConfirm={async () => { await onDeleteBank(confirmBank); setConfirmBank(null); }} />
+      )}
 
       <Card c={c} style={{ padding: 20 }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Security</div>
@@ -3723,9 +4429,9 @@ function DocumentsPage({ c, dark, docs, onUpload, onDelete }) {
 
       <div className="dh-toolbar">
         <SearchBox c={c} placeholder="Search documents..." value={q} onChange={v => { setQ(v); setPage(1); }} />
-        <select value={cat} onChange={e => { setCat(e.target.value); setPage(1); }} style={selectStyle}>
+        <Select c={c} value={cat} onChange={e => { setCat(e.target.value); setPage(1); }} style={selectStyle}>
           {["All Categories", ...DOC_CATS].map(x => <option key={x}>{x}</option>)}
-        </select>
+        </Select>
       </div>
 
       <Card c={c} style={{ overflow: "hidden" }}>
@@ -3885,9 +4591,9 @@ function UploadModal({ c, dark, onClose, onSave }) {
             <input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="GST Certificate.pdf" />
           </label>
           <label style={label}>Category
-            <select style={input} value={cat} onChange={e => setCat(e.target.value)}>
+            <Select c={c} style={input} value={cat} onChange={e => setCat(e.target.value)}>
               {DOC_CATS.map(x => <option key={x}>{x}</option>)}
-            </select>
+            </Select>
           </label>
 
           <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
@@ -4003,12 +4709,12 @@ function ExpensesPage({ c, dark, expenses, onNew, onEdit, onDelete }) {
       <div className="dh-toolbar">
         <SearchBox c={c} placeholder="Search expenses..." value={q} onChange={setQ} />
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <select value={range} onChange={e => setRange(e.target.value)} style={selectStyle}>
+          <Select c={c} value={range} onChange={e => setRange(e.target.value)} style={selectStyle}>
             {["This Month", "Last Month", "This Year", "All Time"].map(x => <option key={x}>{x}</option>)}
-          </select>
-          <select value={cat} onChange={e => setCat(e.target.value)} style={selectStyle}>
+          </Select>
+          <Select c={c} value={cat} onChange={e => setCat(e.target.value)} style={selectStyle}>
             {["All Categories", ...EXP_CATS].map(x => <option key={x}>{x}</option>)}
-          </select>
+          </Select>
         </div>
       </div>
 
@@ -4116,13 +4822,13 @@ function ExpenseModal({ c, dark, expense, onClose, onSave, onDelete }) {
             <label style={label}>Date
               <DateField c={c} value={f.date} onChange={(v) => setF({ ...f, date: v })} /></label>
             <label style={label}>Category
-              <select style={input} value={f.cat} onChange={set("cat")}>
+              <Select c={c} style={input} value={f.cat} onChange={set("cat")}>
                 {EXP_CATS.map(x => <option key={x}>{x}</option>)}
-              </select></label>
+              </Select></label>
             <label style={label}>Payment method
-              <select style={input} value={f.method} onChange={set("method")}>
+              <Select c={c} style={input} value={f.method} onChange={set("method")}>
                 {PAY_METHODS.map(x => <option key={x}>{x}</option>)}
-              </select></label>
+              </Select></label>
           </div>
 
           <label style={label}>Notes (optional)
@@ -4205,7 +4911,8 @@ function buildNotifications({ invoices, payroll, employees, docs }) {
   return out.sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 12);
 }
 
-function NotificationPanel({ c, dark, items, onClose, onGo }) {
+function NotificationPanel({ c, dark, items, readIds, onClose, onOpen, onMarkAllRead }) {
+  const unreadCount = items.filter(n => !readIds.has(n.id)).length;
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
@@ -4216,7 +4923,13 @@ function NotificationPanel({ c, dark, items, onClose, onGo }) {
       }}>
         <div style={{ padding: "14px 16px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 15, fontWeight: 700 }}>Notifications</span>
-          <span style={{ fontSize: 12, color: c.muted }}>{items.length}</span>
+          {unreadCount > 0 ? (
+            <button onClick={onMarkAllRead} style={{ fontSize: 12, fontWeight: 600, color: A.indigo }}>
+              Mark all as read
+            </button>
+          ) : (
+            <span style={{ fontSize: 12, color: c.muted }}>{items.length}</span>
+          )}
         </div>
 
         <div style={{ maxHeight: 380, overflowY: "auto" }}>
@@ -4226,16 +4939,22 @@ function NotificationPanel({ c, dark, items, onClose, onGo }) {
               <div style={{ fontSize: 13.5, fontWeight: 600 }}>All clear</div>
               <div style={{ fontSize: 12.5, color: c.muted, marginTop: 3 }}>Nothing needs your attention.</div>
             </div>
-          ) : items.map(n => (
-            <button key={n.id} onClick={() => { onGo(n); onClose(); }}
-              style={{ width: "100%", textAlign: "left", display: "flex", gap: 12, padding: "12px 16px", borderBottom: `1px solid ${c.border}` }}>
-              <IconTile Icon={n.Icon} tone={n.tone} size={34} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{n.title}</div>
-                <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{n.sub}</div>
-              </div>
-            </button>
-          ))}
+          ) : items.map(n => {
+            const unread = !readIds.has(n.id);
+            return (
+              <button key={n.id} onClick={() => onOpen(n)}
+                style={{ width: "100%", textAlign: "left", display: "flex", gap: 12, padding: "12px 16px", borderBottom: `1px solid ${c.border}`, background: unread ? (dark ? "#141C2E" : "#F8FAFC") : "transparent" }}>
+                <IconTile Icon={n.Icon} tone={n.tone} size={34} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {unread && <span style={{ width: 6, height: 6, borderRadius: "50%", background: A.red, flexShrink: 0 }} />}
+                    <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{n.title}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{n.sub}</div>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </>

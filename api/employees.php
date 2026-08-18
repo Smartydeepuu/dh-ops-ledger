@@ -15,6 +15,16 @@ if ($action === 'list') {
         $s = $pdo->prepare('SELECT month, year, basic FROM payroll WHERE emp_id=? ORDER BY year DESC, month DESC LIMIT 12');
         $s->execute([$r['id']]);
         $r['history'] = $s->fetchAll();
+
+        $d = $pdo->prepare('SELECT id, name, cat, size, uploaded_by, created_at FROM documents WHERE employee_id=? ORDER BY created_at DESC, id DESC');
+        $d->execute([$r['id']]);
+        $r['documents'] = array_map(function ($doc) {
+            return [
+                'id' => (int)$doc['id'], 'name' => $doc['name'], 'cat' => $doc['cat'],
+                'size' => (int)$doc['size'], 'by' => $doc['uploaded_by'],
+                'date' => substr((string)$doc['created_at'], 0, 10),
+            ];
+        }, $d->fetchAll());
     }
     ok(['employees' => $rows]);
 }

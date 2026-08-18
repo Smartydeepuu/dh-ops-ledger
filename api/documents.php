@@ -22,7 +22,24 @@ function ensure_dir() {
 }
 
 if ($action === 'list') {
-    $rows = $pdo->query('SELECT id, name, cat, size, uploaded_by, created_at FROM documents ORDER BY created_at DESC, id DESC')->fetchAll();
+    // The general Documents page only shows company-wide documents (not
+    // tied to a specific client or employee). Client/Employee profile pages
+    // ask for their own documents by passing client_id / employee_id.
+    $clientId = (int)inp('client_id', 0);
+    $employeeId = (int)inp('employee_id', 0);
+
+    if ($clientId) {
+        $st = $pdo->prepare('SELECT id, name, cat, size, uploaded_by, created_at FROM documents WHERE client_id=? ORDER BY created_at DESC, id DESC');
+        $st->execute([$clientId]);
+        $rows = $st->fetchAll();
+    } elseif ($employeeId) {
+        $st = $pdo->prepare('SELECT id, name, cat, size, uploaded_by, created_at FROM documents WHERE employee_id=? ORDER BY created_at DESC, id DESC');
+        $st->execute([$employeeId]);
+        $rows = $st->fetchAll();
+    } else {
+        $rows = $pdo->query('SELECT id, name, cat, size, uploaded_by, created_at FROM documents WHERE client_id IS NULL AND employee_id IS NULL ORDER BY created_at DESC, id DESC')->fetchAll();
+    }
+
     ok(['documents' => array_map(function ($r) {
         return [
             'id' => (int)$r['id'], 'name' => $r['name'], 'cat' => $r['cat'],
@@ -50,11 +67,9 @@ if ($action === 'upload') {
     if ($size <= 0)        fail('The file is empty.');
     if ($size > DOC_MAX)   fail('File is too large. Maximum size is 10 MB.');
 
-    // trust the file's contents, not its name
     // Trust the file's actual bytes, not its declared name or MIME type.
     // Checking the magic-number header directly avoids depending on the
-    // fileinfo extension, which isn't always enabled on shared hosting —
-    // and was silently crashing this endpoint when it wasn't.
+    // fileinfo extension, which isn't always enabled on shared hosting.
     $header = @file_get_contents($tmp, false, null, 0, 5);
     if ($header !== "%PDF-") fail('Only PDF files can be uploaded.');
     $mime = 'application/pdf';
@@ -66,6 +81,11 @@ if ($action === 'upload') {
     $cat = (string)($_POST['cat'] ?? 'Other');
     if (!in_array($cat, DOC_CATS, true)) $cat = 'Other';
 
+    // Optional association — set from a client or employee profile upload.
+    // Left NULL for the general company-wide Documents page.
+    $clientId = isset($_POST['client_id']) && $_POST['client_id'] !== '' ? (int)$_POST['client_id'] : null;
+    $employeeId = isset($_POST['employee_id']) && $_POST['employee_id'] !== '' ? (int)$_POST['employee_id'] : null;
+
     // stored name is random — the original name never touches the filesystem
     $stored = bin2hex(random_bytes(16)) . '.pdf';
 
@@ -73,11 +93,17 @@ if ($action === 'upload') {
         fail('Could not save the file. Check folder permissions on /storage/docs.', 500);
     }
 
-    $st = $pdo->prepare('INSERT INTO documents (name, cat, filename, size, mime, uploaded_by) VALUES (?,?,?,?,?,?)');
-    $st->execute([$name, $cat, $stored, $size, $mime, $u['name']]);
+    $st = $pdo->prepare('INSERT INTO documents (name, cat, filename, size, mime, uploaded_by, client_id, employee_id) VALUES (?,?,?,?,?,?,?,?)');
+    $st->execute([$name, $cat, $stored, $size, $mime, $u['name'], $clientId, $employeeId]);
     $id = (int)$pdo->lastInsertId();
 
-    log_activity('document', $id, "Document uploaded: $name", 'blue');
+    if ($clientId) {
+        log_activity('client', $clientId, "Document uploaded: $name", 'blue');
+    } elseif ($employeeId) {
+        log_activity('employee', $employeeId, "Document uploaded: $name", 'blue');
+    } else {
+        log_activity('document', $id, "Document uploaded: $name", 'blue');
+    }
     ok(['id' => $id]);
 }
 

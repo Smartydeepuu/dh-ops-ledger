@@ -34,10 +34,10 @@ function load_invoices($pdo, $id = null) {
         $r['date'] = $r['invoice_date'];
         $r['due'] = $r['due_date'];
         $r['discount'] = (float)$r['discount'];
+        $r['bankAccountId'] = $r['bank_account_id'] !== null ? (int)$r['bank_account_id'] : 0;
     }
     return $rows;
 }
-
 if ($action === 'list') {
     // auto-mark overdue before listing
     $pdo->exec("UPDATE invoices SET status='Overdue'
@@ -45,6 +45,12 @@ if ($action === 'list') {
                   AND id NOT IN (SELECT invoice_id FROM payments)");
     ok(['invoices' => load_invoices($pdo)]);
 }
+
+$pdo->exec("UPDATE invoices i
+                SET i.status='Paid'
+                WHERE i.status NOT IN ('Cancelled','Paid')
+                  AND (SELECT COALESCE(SUM(amt),0) FROM payments p WHERE p.invoice_id = i.id) + 0.01 >=
+                      (SELECT COALESCE(SUM(qty*rate),0) FROM invoice_items x WHERE x.invoice_id = i.id) - i.discount");
 
 if ($action === 'next_number') {
     $prefix = $pdo->query("SELECT sval FROM settings WHERE skey='invoice_prefix'")->fetchColumn() ?: 'INV';
@@ -65,7 +71,8 @@ if ($action === 'save') {
     $currency = strtoupper((string)inp('currency', 'INR'));
     $discount = num(inp('discount', 0));
     $notes    = (string)inp('notes', '');
-    $status   = (string)inp('status', 'Draft');
+    $status   = (string)inp('status', 'Pending');
+    $bankId   = (int)inp('bankAccountId', 0) ?: null;
     $items    = inp('items', []);
 
     if (!$clientId) fail('Pick a client.');
@@ -95,8 +102,8 @@ if ($action === 'save') {
         $pdo->beginTransaction();
         try {
             if ($id) {
-                $upd = $pdo->prepare('UPDATE invoices SET no=?, client_id=?, invoice_date=?, due_date=?, terms=?, currency=?, discount=?, notes=?, status=? WHERE id=?');
-                $upd->execute([$no, $clientId, $date, $due, $terms, $currency, $discount, $notes, $status, $id]);
+                $upd = $pdo->prepare('UPDATE invoices SET no=?, client_id=?, invoice_date=?, due_date=?, terms=?, currency=?, discount=?, notes=?, status=?, bank_account_id=? WHERE id=?');
+                $upd->execute([$no, $clientId, $date, $due, $terms, $currency, $discount, $notes, $status, $bankId, $id]);
                 if ($upd->rowCount() === 0) {
                     // The browser thinks it's editing an invoice that no longer
                     // exists on the server (e.g. an old tab left open from
@@ -112,9 +119,9 @@ if ($action === 'save') {
                 }
                 $pdo->prepare('DELETE FROM invoice_items WHERE invoice_id=?')->execute([$id]);
             } else {
-                $pdo->prepare('INSERT INTO invoices (no, client_id, invoice_date, due_date, terms, currency, discount, notes, status)
-                               VALUES (?,?,?,?,?,?,?,?,?)')
-                    ->execute([$no, $clientId, $date, $due, $terms, $currency, $discount, $notes, $status]);
+                $pdo->prepare('INSERT INTO invoices (no, client_id, invoice_date, due_date, terms, currency, discount, notes, status, bank_account_id)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([$no, $clientId, $date, $due, $terms, $currency, $discount, $notes, $status, $bankId]);
                 $id = (int)$pdo->lastInsertId();
                 if ($id <= 0) {
                     $pdo->rollBack();
@@ -188,6 +195,16 @@ if ($action === 'set_status') {
     $status = (string)inp('status', '');
     $allowed = ['Draft','Sent','Pending','Partially Paid','Paid','Overdue','Cancelled'];
     if (!in_array($status, $allowed, true)) fail('Invalid status.');
+
+    $cur = $pdo->prepare('SELECT status FROM invoices WHERE id=?');
+    $cur->execute([$id]);
+    $curRow = $cur->fetch();
+    if (!$curRow) fail('Invoice not found.', 404);
+
+    if ($curRow['status'] === 'Paid') {
+        fail('This invoice is fully paid — its status is locked and cannot be changed.');
+    }
+
     $pdo->prepare('UPDATE invoices SET status=? WHERE id=?')->execute([$status, $id]);
     log_activity('invoice', $id, "Status changed to $status", 'amber');
     ok();
@@ -237,5 +254,10 @@ if ($action === 'add_payment') {
     $rows = load_invoices($pdo, $id);
     ok(['invoice' => $rows[0] ?? null, 'status' => $status]);
 }
-
+if ($action === 'delete') {
+    $id = (int)inp('id', 0);
+    $pdo->prepare('DELETE FROM invoices WHERE id=?')->execute([$id]);
+    log_activity('invoice', $id, 'Invoice deleted', 'red');
+    ok();
+}
 fail('Unknown action.');

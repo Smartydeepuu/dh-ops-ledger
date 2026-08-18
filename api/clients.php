@@ -5,11 +5,13 @@ $pdo = db();
 $action = inp('action', 'list');
 
 if ($action === 'list') {
+    // Live USD-based rates so a client's "Paid" / "Outstanding" totals never
+    // just add raw numbers across different invoice currencies.
+    $rates = get_fx_rates();
+
     $rows = $pdo->query('
         SELECT c.*,
-          (SELECT COUNT(*) FROM invoices i WHERE i.client_id=c.id) AS total_invoices,
-          (SELECT COALESCE(SUM(p.amt),0) FROM payments p
-             JOIN invoices i2 ON i2.id=p.invoice_id WHERE i2.client_id=c.id) AS paid
+          (SELECT COUNT(*) FROM invoices i WHERE i.client_id=c.id) AS total_invoices
         FROM clients c
         WHERE c.archived=0
         ORDER BY c.company
@@ -25,11 +27,25 @@ if ($action === 'list') {
         $r['invoices'] = $st->fetchAll();
 
         $outstanding = 0;
+        $paidInr = 0;
         foreach ($r['invoices'] as $iv) {
+            $paidInr += to_inr($iv['paid'], $iv['currency'], $rates);
             if (in_array($iv['status'], ['Cancelled', 'Draft'], true)) continue;
-            $outstanding += max(0, ((float)$iv['subtotal'] - (float)$iv['discount']) - (float)$iv['paid']);
+            $due = max(0, ((float)$iv['subtotal'] - (float)$iv['discount']) - (float)$iv['paid']);
+            $outstanding += to_inr($due, $iv['currency'], $rates);
         }
         $r['outstanding'] = $outstanding;
+        $r['paid'] = $paidInr;
+
+        $st = $pdo->prepare('SELECT id, name, cat, size, uploaded_by, created_at FROM documents WHERE client_id=? ORDER BY created_at DESC, id DESC');
+        $st->execute([$r['id']]);
+        $r['documents'] = array_map(function ($d) {
+            return [
+                'id' => (int)$d['id'], 'name' => $d['name'], 'cat' => $d['cat'],
+                'size' => (int)$d['size'], 'by' => $d['uploaded_by'],
+                'date' => substr((string)$d['created_at'], 0, 10),
+            ];
+        }, $st->fetchAll());
 
         $st = $pdo->prepare('SELECT * FROM client_contacts WHERE client_id=? ORDER BY id');
         $st->execute([$r['id']]);

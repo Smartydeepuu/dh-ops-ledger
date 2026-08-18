@@ -96,7 +96,7 @@ function invoice_auto_status($invoiceId) {
     $inv->execute([$invoiceId]);
     $i = $inv->fetch();
     if (!$i) return null;
-    if (in_array($i['status'], ['Cancelled', 'Draft'], true)) return $i['status'];
+    if ($i['status'] === 'Cancelled') return $i['status'];
 
     $it = $pdo->prepare('SELECT COALESCE(SUM(qty*rate),0) s FROM invoice_items WHERE invoice_id=?');
     $it->execute([$invoiceId]);
@@ -118,4 +118,40 @@ function invoice_auto_status($invoiceId) {
 
     $pdo->prepare('UPDATE invoices SET status=? WHERE id=?')->execute([$status, $invoiceId]);
     return $status;
+}
+function get_fx_rates() {
+    $cacheFile = __DIR__ . '/../storage/fx_rates.json';
+    $maxAge = 6 * 3600;
+
+    $cached = null;
+    if (file_exists($cacheFile)) {
+        $cached = json_decode(file_get_contents($cacheFile), true);
+        if ($cached && isset($cached['fetched_at']) && (time() - $cached['fetched_at']) < $maxAge) {
+            return $cached['rates'];
+        }
+    }
+
+    $rates = null;
+    $ctx = stream_context_create(['http' => ['timeout' => 4]]);
+    $raw = @file_get_contents('https://open.er-api.com/v6/latest/USD', false, $ctx);
+    if ($raw) {
+        $data = json_decode($raw, true);
+        if (isset($data['rates']) && is_array($data['rates'])) $rates = $data['rates'];
+    }
+
+    if ($rates) {
+        @file_put_contents($cacheFile, json_encode(['fetched_at' => time(), 'rates' => $rates]));
+        return $rates;
+    }
+
+    if ($cached && isset($cached['rates'])) return $cached['rates'];
+
+    return ['USD' => 1, 'INR' => 87, 'EUR' => 0.92, 'AUD' => 1.5];
+}
+
+function to_inr($amount, $currency, $rates) {
+    $currency = strtoupper($currency ?: 'INR');
+    if ($currency === 'INR') return (float)$amount;
+    if (!isset($rates[$currency]) || !isset($rates['INR']) || $rates[$currency] == 0) return (float)$amount;
+    return (float)$amount * ($rates['INR'] / $rates[$currency]);
 }

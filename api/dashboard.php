@@ -6,10 +6,22 @@ $pdo = db();
 $from = inp('from') ?: date('Y-m-01');
 $to   = inp('to')   ?: date('Y-m-t');
 
-/* Income = payments actually received in the period (not invoices raised) */
-$st = $pdo->prepare('SELECT COALESCE(SUM(amt),0) s FROM payments WHERE paid_on BETWEEN ? AND ?');
+/* Live USD-based exchange rates (cached ~6h) so INR/USD/EUR/AUD payments
+   can be combined into one honest INR figure instead of being added
+   together as raw numbers. */
+$rates = get_fx_rates();
+
+/* Income = payments actually received in the period (not invoices raised),
+   converted to INR */
+$st = $pdo->prepare('
+    SELECT p.amt, i.currency
+    FROM payments p JOIN invoices i ON i.id = p.invoice_id
+    WHERE p.paid_on BETWEEN ? AND ?');
 $st->execute([$from, $to]);
-$income = (float)$st->fetch()['s'];
+$income = 0;
+foreach ($st->fetchAll() as $p) {
+    $income += to_inr($p['amt'], $p['currency'], $rates);
+}
 
 /* Salaries paid in the period */
 $st = $pdo->prepare('SELECT COALESCE(SUM(basic+bonus-deductions),0) s FROM payroll WHERE status="Paid" AND paid_on BETWEEN ? AND ?');
@@ -24,7 +36,7 @@ try {
     $otherExpenses = 0; // expenses table not migrated yet
 }
 
-/* Outstanding across all live invoices */
+/* Outstanding across all live invoices, converted to INR */
 $rows = $pdo->query("
     SELECT i.id, i.currency, i.discount, i.status,
       COALESCE((SELECT SUM(qty*rate) FROM invoice_items x WHERE x.invoice_id=i.id),0) sub,
@@ -34,7 +46,7 @@ $rows = $pdo->query("
 $outstanding = 0; $overdueCount = 0;
 foreach ($rows as $r) {
     $due = max(0, ((float)$r['sub'] - (float)$r['discount']) - (float)$r['paid']);
-    if ($r['currency'] === 'INR') $outstanding += $due;   // only base currency is summed
+    $outstanding += to_inr($due, $r['currency'], $rates);
     if ($r['status'] === 'Overdue' && $due > 0) $overdueCount++;
 }
 
@@ -42,19 +54,35 @@ $st = $pdo->prepare('SELECT COUNT(*) c FROM invoices WHERE status="Paid" AND inv
 $st->execute([$from, $to]);
 $paidInvoices = (int)$st->fetch()['c'];
 
-/* Daily series for the chart */
-$st = $pdo->prepare('SELECT paid_on d, SUM(amt) v FROM payments WHERE paid_on BETWEEN ? AND ? GROUP BY paid_on ORDER BY paid_on');
-$st->execute([$from, $to]);
-$incomeSeries = $st->fetchAll();
-
+/* Daily income series for the chart, converted to INR */
 $st = $pdo->prepare('
-    SELECT i.invoice_date d, SUM(COALESCE(x.sub,0) - i.discount) v
+    SELECT p.paid_on d, p.amt, i.currency
+    FROM payments p JOIN invoices i ON i.id = p.invoice_id
+    WHERE p.paid_on BETWEEN ? AND ?
+    ORDER BY p.paid_on');
+$st->execute([$from, $to]);
+$incomeByDate = [];
+foreach ($st->fetchAll() as $row) {
+    $d = $row['d'];
+    $incomeByDate[$d] = ($incomeByDate[$d] ?? 0) + to_inr($row['amt'], $row['currency'], $rates);
+}
+$incomeSeries = [];
+foreach ($incomeByDate as $d => $v) { $incomeSeries[] = ['d' => $d, 'v' => $v]; }
+
+/* Daily invoice-raised series, converted to INR */
+$st = $pdo->prepare('
+    SELECT i.invoice_date d, i.currency, COALESCE(x.sub,0) - i.discount AS v
     FROM invoices i
     LEFT JOIN (SELECT invoice_id, SUM(qty*rate) sub FROM invoice_items GROUP BY invoice_id) x ON x.invoice_id=i.id
-    WHERE i.invoice_date BETWEEN ? AND ? AND i.status <> "Cancelled"
-    GROUP BY i.invoice_date ORDER BY i.invoice_date');
+    WHERE i.invoice_date BETWEEN ? AND ? AND i.status <> "Cancelled"');
 $st->execute([$from, $to]);
-$invoiceSeries = $st->fetchAll();
+$invoiceByDate = [];
+foreach ($st->fetchAll() as $row) {
+    $d = $row['d'];
+    $invoiceByDate[$d] = ($invoiceByDate[$d] ?? 0) + to_inr($row['v'], $row['currency'], $rates);
+}
+$invoiceSeries = [];
+foreach ($invoiceByDate as $d => $v) { $invoiceSeries[] = ['d' => $d, 'v' => $v]; }
 
 /* Recent invoices */
 $recent = $pdo->query("
