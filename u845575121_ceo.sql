@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1:3306
--- Generation Time: Aug 18, 2026 at 02:51 PM
+-- Generation Time: Aug 19, 2026 at 06:19 AM
 -- Server version: 11.8.8-MariaDB-log
 -- PHP Version: 7.2.34
 
@@ -170,7 +170,27 @@ INSERT INTO `activity_log` (`id`, `entity`, `entity_id`, `body`, `tone`, `author
 (126, 'invoice', 16, 'Invoice INV-2026-010 saved', 'indigo', 'Deepak Kashyap', '2026-08-18 10:36:31'),
 (127, 'invoice', 16, 'Invoice INV-2026-010 saved', 'indigo', 'Deepak Kashyap', '2026-08-18 11:51:02'),
 (128, 'invoice', 16, 'Payment recorded', 'green', 'Deepak Kashyap', '2026-08-18 11:51:13'),
-(129, 'invoice', 14, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-18 11:54:55');
+(129, 'invoice', 14, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-18 11:54:55'),
+(130, 'employee', 3, 'Employee removed', 'red', 'Deepak Kashyap', '2026-08-19 04:33:07'),
+(131, 'invoice', 10, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 04:33:13'),
+(132, 'invoice', 18, 'Invoice INV-2026-009 saved', 'indigo', 'Deepak Kashyap', '2026-08-19 04:33:35'),
+(133, 'invoice', 21, 'Invoice INV-2026-011 saved', 'indigo', 'Deepak Kashyap', '2026-08-19 06:06:47'),
+(134, 'invoice', 21, 'Payment recorded', 'green', 'Deepak Kashyap', '2026-08-19 06:07:36'),
+(135, 'invoice', 5, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:25'),
+(136, 'invoice', 6, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:28'),
+(137, 'invoice', 4, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:31'),
+(138, 'invoice', 8, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:34'),
+(139, 'invoice', 16, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:37'),
+(140, 'invoice', 12, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:41'),
+(141, 'invoice', 21, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:08:55'),
+(142, 'invoice', 22, 'Invoice INV-2026-003 saved', 'indigo', 'Deepak Kashyap', '2026-08-19 06:09:26'),
+(143, 'invoice', 22, 'Payment recorded', 'green', 'Deepak Kashyap', '2026-08-19 06:09:58'),
+(144, 'invoice', 1, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:10:14'),
+(145, 'invoice', 18, 'Invoice deleted', 'red', 'Deepak Kashyap', '2026-08-19 06:10:50'),
+(146, 'invoice', 22, 'Invoice INV-2026-003 saved', 'indigo', 'Deepak Kashyap', '2026-08-19 06:11:04'),
+(147, 'settings', NULL, 'Settings updated', 'amber', 'Deepak Kashyap', '2026-08-19 06:12:01'),
+(148, 'invoice', 23, 'Invoice INV-2026-002 saved', 'indigo', 'Deepak Kashyap', '2026-08-19 06:17:25'),
+(149, 'invoice', 23, 'Payment recorded', 'green', 'Deepak Kashyap', '2026-08-19 06:17:40');
 
 -- --------------------------------------------------------
 
@@ -331,7 +351,6 @@ CREATE TABLE `employees` (
 --
 
 INSERT INTO `employees` (`id`, `name`, `email`, `phone`, `role`, `dept`, `salary`, `salary_type`, `pay_date`, `join_date`, `address`, `bank`, `notes`, `status`, `created_at`) VALUES
-(3, 'Deepak Kumar', 'deepakku639@gmail.com', '07050697074', 'hr', 'Design', 45000.00, 'Monthly', 20, '2026-08-17', 'House no. 76, Chhota Kharikabad, Bhuli', '', '', 'Active', '2026-08-17 11:22:09'),
 (4, 'Deepak Kumar', 'info@digitalhikers.in', '07979982838', '', 'Marketing', 0.00, 'Monthly', 20, '2026-08-15', '23a,', '', '', 'Active', '2026-08-17 16:53:31'),
 (5, 'Deepak kumar', 'digitalhikers.net@gmail.com', '07979982838', 'll', 'Design', 0.00, 'Monthly', 20, '2026-08-18', '76, chhota Kharikabad', '', '', 'Active', '2026-08-18 10:19:24');
 
@@ -361,14 +380,8 @@ CREATE TABLE `invoices` (
 --
 
 INSERT INTO `invoices` (`id`, `no`, `client_id`, `invoice_date`, `due_date`, `terms`, `currency`, `discount`, `notes`, `bank_account_id`, `status`, `created_at`) VALUES
-(1, 'INV-2026-001', 1, '2026-08-15', '2026-08-30', 'Net 15', 'INR', 0.00, '', NULL, 'Paid', '2026-08-15 18:10:58'),
-(4, 'INV-2026-002', 2, '2026-08-17', '2026-09-01', 'Net 15', 'AUD', 0.00, '', NULL, 'Paid', '2026-08-17 11:11:43'),
-(5, 'INV-2026-003', 2, '2026-08-17', '2026-09-01', 'Net 15', 'USD', 0.00, '', NULL, 'Paid', '2026-08-17 12:09:38'),
-(6, 'INV-2026-004', 2, '2026-08-17', '2026-09-01', 'Net 15', 'INR', 0.00, '', NULL, 'Paid', '2026-08-17 12:50:14'),
-(8, 'INV-2026-006', 4, '2026-08-17', '2026-09-01', 'Net 15', 'EUR', 0.00, '', NULL, 'Paid', '2026-08-17 13:02:08'),
-(10, 'INV-2026-007', 2, '2026-08-17', '2026-08-24', 'Net 7', 'INR', 0.00, '', NULL, 'Pending', '2026-08-17 23:49:57'),
-(12, 'INV-2026-008', 2, '2026-08-18', '2026-08-18', 'Due on receipt', 'INR', 0.00, '', 2, 'Paid', '2026-08-18 10:21:50'),
-(16, 'INV-2026-010', 5, '2026-08-18', '2026-08-25', 'Net 7', 'USD', 0.00, '', 1, 'Paid', '2026-08-18 10:36:31');
+(22, 'INV-2026-003', 5, '2026-08-18', '2026-08-25', 'Net 7', 'USD', 0.00, '', 1, 'Paid', '2026-08-19 06:09:26'),
+(23, 'INV-2026-002', 5, '2026-08-19', '2026-09-03', 'Net 15', 'USD', 0.00, '', 1, 'Paid', '2026-08-19 06:17:25');
 
 -- --------------------------------------------------------
 
@@ -390,14 +403,8 @@ CREATE TABLE `invoice_items` (
 --
 
 INSERT INTO `invoice_items` (`id`, `invoice_id`, `descr`, `qty`, `rate`, `sort_order`) VALUES
-(94, 1, 'test', 1.00, 5000.00, 0),
-(109, 5, 'jhj', 1.00, 1000.00, 0),
-(110, 6, '45k', 1.00, 2000.20, 0),
-(112, 8, ';', 1.00, 6000.00, 0),
-(113, 4, '', 1.00, 5000.00, 0),
-(114, 10, 'k', 1.00, 50000.00, 0),
-(116, 12, 'hj', 1.00, 5000.00, 0),
-(119, 16, 'website', 1.00, 50000.00, 0);
+(123, 22, 'a', 1.00, 100.00, 0),
+(124, 23, 'WEb', 1.00, 5000.00, 0);
 
 -- --------------------------------------------------------
 
@@ -409,6 +416,7 @@ CREATE TABLE `payments` (
   `id` int(11) NOT NULL,
   `invoice_id` int(11) NOT NULL,
   `amt` decimal(12,2) NOT NULL,
+  `inr_amount` decimal(18,2) DEFAULT NULL,
   `paid_on` date NOT NULL,
   `method` varchar(40) DEFAULT NULL,
   `ref` varchar(80) DEFAULT NULL,
@@ -420,14 +428,9 @@ CREATE TABLE `payments` (
 -- Dumping data for table `payments`
 --
 
-INSERT INTO `payments` (`id`, `invoice_id`, `amt`, `paid_on`, `method`, `ref`, `note`, `created_at`) VALUES
-(7, 4, 50.00, '2026-08-17', 'Bank Transfer', '', '', '2026-08-17 11:12:24'),
-(8, 5, 1000.00, '2026-08-17', 'Bank Transfer', '134651k', '', '2026-08-17 12:09:45'),
-(9, 6, 2000.20, '2026-08-17', 'Bank Transfer', '', '', '2026-08-17 12:50:34'),
-(11, 8, 6000.00, '2026-08-17', 'Bank Transfer', 'bnk', '', '2026-08-17 13:02:26'),
-(12, 4, 4950.00, '2026-08-17', 'Bank Transfer', '', '', '2026-08-17 13:05:11'),
-(13, 12, 5000.00, '2026-08-18', 'Bank Transfer', '', '', '2026-08-18 10:25:01'),
-(15, 16, 50000.00, '2026-08-18', 'Bank Transfer', '', '', '2026-08-18 11:51:13');
+INSERT INTO `payments` (`id`, `invoice_id`, `amt`, `inr_amount`, `paid_on`, `method`, `ref`, `note`, `created_at`) VALUES
+(17, 22, 100.00, NULL, '2026-08-18', 'Bank Transfer', '', '', '2026-08-19 06:09:58'),
+(18, 23, 5000.00, 500.00, '2026-08-19', 'Bank Transfer', '', '', '2026-08-19 06:17:40');
 
 -- --------------------------------------------------------
 
@@ -449,14 +452,6 @@ CREATE TABLE `payroll` (
   `ref` varchar(80) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
-
---
--- Dumping data for table `payroll`
---
-
-INSERT INTO `payroll` (`id`, `emp_id`, `month`, `year`, `basic`, `bonus`, `deductions`, `status`, `paid_on`, `method`, `ref`, `created_at`) VALUES
-(2, 3, 8, 2026, 45000.00, 0.00, 0.00, 'Paid', '2026-08-17', 'Bank Transfer', '', '2026-08-17 11:23:36'),
-(4, 3, 9, 2026, 45000.00, 0.00, 0.00, 'Paid', '2026-08-17', 'Bank Transfer', '', '2026-08-17 13:03:49');
 
 -- --------------------------------------------------------
 
@@ -489,8 +484,8 @@ INSERT INTO `settings` (`skey`, `sval`) VALUES
 ('invoice_prefix', 'INV'),
 ('invoice_terms', 'Net 15'),
 ('salary_pay_date', '20'),
-('signatory_name', 'Deepak Kumar'),
-('signatory_title', 'Founder & CEO');
+('signatory_name', ''),
+('signatory_title', '');
 
 -- --------------------------------------------------------
 
@@ -616,7 +611,7 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `activity_log`
 --
 ALTER TABLE `activity_log`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=130;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=150;
 
 --
 -- AUTO_INCREMENT for table `bank_accounts`
@@ -658,19 +653,19 @@ ALTER TABLE `employees`
 -- AUTO_INCREMENT for table `invoices`
 --
 ALTER TABLE `invoices`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT for table `invoice_items`
 --
 ALTER TABLE `invoice_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=120;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=125;
 
 --
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT for table `payroll`
