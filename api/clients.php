@@ -21,7 +21,9 @@ if ($action === 'list') {
         $st = $pdo->prepare('
             SELECT i.id, i.no, i.invoice_date, i.due_date, i.status, i.currency, i.discount,
                    COALESCE((SELECT SUM(qty*rate) FROM invoice_items x WHERE x.invoice_id=i.id),0) AS subtotal,
-                   COALESCE((SELECT SUM(amt) FROM payments p WHERE p.invoice_id=i.id),0) AS paid
+                   COALESCE((SELECT SUM(amt) FROM payments p WHERE p.invoice_id=i.id),0) AS paid,
+                   COALESCE((SELECT SUM(inr_amount) FROM payments p WHERE p.invoice_id=i.id),0) AS paid_inr_stored,
+                   COALESCE((SELECT SUM(amt) FROM payments p WHERE p.invoice_id=i.id AND inr_amount IS NULL),0) AS paid_amt_unconverted
             FROM invoices i WHERE i.client_id=? ORDER BY i.invoice_date DESC, i.id DESC');
         $st->execute([$r['id']]);
         $r['invoices'] = $st->fetchAll();
@@ -29,7 +31,10 @@ if ($action === 'list') {
         $outstanding = 0;
         $paidInr = 0;
         foreach ($r['invoices'] as $iv) {
-            $paidInr += to_inr($iv['paid'], $iv['currency'], $rates);
+            // Prefer each payment's own stored INR amount (the real conversion
+            // at capture time); only fall back to a live-rate estimate for
+            // older payment rows that predate that column.
+            $paidInr += (float)$iv['paid_inr_stored'] + to_inr($iv['paid_amt_unconverted'], $iv['currency'], $rates);
             if (in_array($iv['status'], ['Cancelled', 'Draft'], true)) continue;
             $due = max(0, ((float)$iv['subtotal'] - (float)$iv['discount']) - (float)$iv['paid']);
             $outstanding += to_inr($due, $iv['currency'], $rates);

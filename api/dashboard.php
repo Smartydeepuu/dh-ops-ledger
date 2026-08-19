@@ -14,13 +14,13 @@ $rates = get_fx_rates();
 /* Income = payments actually received in the period (not invoices raised),
    converted to INR */
 $st = $pdo->prepare('
-    SELECT p.amt, i.currency
+    SELECT p.amt, p.inr_amount, i.currency
     FROM payments p JOIN invoices i ON i.id = p.invoice_id
     WHERE p.paid_on BETWEEN ? AND ?');
 $st->execute([$from, $to]);
 $income = 0;
 foreach ($st->fetchAll() as $p) {
-    $income += to_inr($p['amt'], $p['currency'], $rates);
+    $income += $p['inr_amount'] !== null ? (float)$p['inr_amount'] : to_inr($p['amt'], $p['currency'], $rates);
 }
 
 /* Salaries paid in the period */
@@ -56,7 +56,7 @@ $paidInvoices = (int)$st->fetch()['c'];
 
 /* Daily income series for the chart, converted to INR */
 $st = $pdo->prepare('
-    SELECT p.paid_on d, p.amt, i.currency
+    SELECT p.paid_on d, p.amt, p.inr_amount, i.currency
     FROM payments p JOIN invoices i ON i.id = p.invoice_id
     WHERE p.paid_on BETWEEN ? AND ?
     ORDER BY p.paid_on');
@@ -64,7 +64,8 @@ $st->execute([$from, $to]);
 $incomeByDate = [];
 foreach ($st->fetchAll() as $row) {
     $d = $row['d'];
-    $incomeByDate[$d] = ($incomeByDate[$d] ?? 0) + to_inr($row['amt'], $row['currency'], $rates);
+    $v = $row['inr_amount'] !== null ? (float)$row['inr_amount'] : to_inr($row['amt'], $row['currency'], $rates);
+    $incomeByDate[$d] = ($incomeByDate[$d] ?? 0) + $v;
 }
 $incomeSeries = [];
 foreach ($incomeByDate as $d => $v) { $incomeSeries[] = ['d' => $d, 'v' => $v]; }

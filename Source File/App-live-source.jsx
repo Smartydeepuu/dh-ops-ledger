@@ -1355,6 +1355,7 @@ export default function App() {
   const addPayment = async (inv, p) => {
     const r = await guard(() => api.addPayment({
       invoice_id: inv.id, amt: p.amt, date: p.date, method: p.method, ref: p.ref, note: p.note,
+      inr_amount: p.inrAmount,
     }), "Payment recorded.");
     setPayFor(null);
     if (!r) return;
@@ -2990,7 +2991,6 @@ function InvoiceDoc({ c, dark, co = COMPANY, inv, client, banks }) {
           <div>Invoice No. <b style={{ color: INK }}>{inv.no}</b></div>
           <div>Date: <b style={{ color: INK }}>{fmtDate(inv.date)}</b></div>
           <div>Due Date: <b style={{ color: INK }}>{fmtDate(inv.due)}</b></div>
-          <div>Terms: <b style={{ color: INK }}>{inv.terms}</b></div>
           <div>Currency: <b style={{ color: INK }}>{cur}</b></div>
         </div>
       </div>
@@ -3359,10 +3359,22 @@ function PaymentModal({ c, inv, onClose, onSave }) {
   const t = invTotals(inv);
   const cur = inv.currency || "INR";
   const m = (n) => money(n, cur);
+  const isForeign = cur !== "INR";
   const [f, setF] = useState({
     amt: t.due, date: new Date().toISOString().slice(0, 10),
-    method: "Bank Transfer", ref: "", note: "",
+    method: "Bank Transfer", ref: "", note: "", inrAmount: "",
   });
+  const inrTouched = useRef(false);
+
+  useEffect(() => {
+    if (!isForeign || inrTouched.current) return;
+    let cancelled = false;
+    api.fxPreview(f.amt, cur).then(r => {
+      if (!cancelled && !inrTouched.current) setF(prev => ({ ...prev, inrAmount: Math.round(r.inr) }));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isForeign]);
 
   const label = { fontSize: 12.5, fontWeight: 500, color: c.inkSoft, display: "block", marginBottom: 6 };
   const input = {
@@ -3389,6 +3401,11 @@ function PaymentModal({ c, inv, onClose, onSave }) {
 
           <label style={label}>Amount received ({CURRENCIES[cur].sym})
             <input type="number" style={input} value={f.amt} onChange={e => setF({ ...f, amt: Number(e.target.value) })} /></label>
+          {isForeign && (
+            <label style={label}>Amount received (INR)
+              <input type="number" style={input} value={f.inrAmount}
+                onChange={e => { inrTouched.current = true; setF({ ...f, inrAmount: e.target.value === "" ? "" : Number(e.target.value) }); }} /></label>
+          )}
           <label style={label}>Payment date
             <DateField c={c} value={f.date} onChange={(v) => setF({ ...f, date: v })} /></label>
           <label style={label}>Payment method

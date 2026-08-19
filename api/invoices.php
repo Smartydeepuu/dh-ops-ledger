@@ -210,6 +210,12 @@ if ($action === 'set_status') {
     ok();
 }
 
+if ($action === 'fx_preview') {
+    $amt = num(inp('amt', 0));
+    $currency = (string)inp('currency', 'INR');
+    ok(['inr' => to_inr($amt, $currency, get_fx_rates())]);
+}
+
 if ($action === 'add_payment') {
     $id     = (int)inp('invoice_id', 0);
     $amt    = num(inp('amt', 0));
@@ -217,6 +223,7 @@ if ($action === 'add_payment') {
     $method = (string)inp('method', '');
     $ref    = (string)inp('ref', '');
     $note   = (string)inp('note', '');
+    $inrIn  = num(inp('inr_amount', 0));
     if (!$id || $amt <= 0) fail('Enter a payment amount.');
 
     // Prevent overpayment: a capture can never push total paid past the
@@ -226,11 +233,21 @@ if ($action === 'add_payment') {
     $it->execute([$id]);
     $subtotal = (float)$it->fetch()['s'];
 
-    $invRow = $pdo->prepare('SELECT discount FROM invoices WHERE id=?');
+    $invRow = $pdo->prepare('SELECT discount, currency FROM invoices WHERE id=?');
     $invRow->execute([$id]);
     $invData = $invRow->fetch();
     if (!$invData) fail('Invoice not found.', 404);
     $total = max(0, $subtotal - (float)$invData['discount']);
+
+    // The INR amount actually received: for INR invoices it's just the
+    // payment amount; for foreign-currency invoices it's whatever the client
+    // sent (the real conversion their bank/gateway applied), falling back to
+    // a live-rate estimate only if the client didn't send one.
+    if (strtoupper($invData['currency']) === 'INR') {
+        $inrAmount = $amt;
+    } else {
+        $inrAmount = $inrIn > 0 ? $inrIn : to_inr($amt, $invData['currency'], get_fx_rates());
+    }
 
     $pm = $pdo->prepare('SELECT COALESCE(SUM(amt),0) s FROM payments WHERE invoice_id=?');
     $pm->execute([$id]);
@@ -245,8 +262,8 @@ if ($action === 'add_payment') {
         fail('Amount exceeds the remaining balance of ' . number_format($remaining, 2) . '.');
     }
 
-    $pdo->prepare('INSERT INTO payments (invoice_id, amt, paid_on, method, ref, note) VALUES (?,?,?,?,?,?)')
-        ->execute([$id, $amt, $date, $method, $ref, $note]);
+    $pdo->prepare('INSERT INTO payments (invoice_id, amt, inr_amount, paid_on, method, ref, note) VALUES (?,?,?,?,?,?,?)')
+        ->execute([$id, $amt, $inrAmount, $date, $method, $ref, $note]);
 
     $status = invoice_auto_status($id);
     log_activity('invoice', $id, 'Payment recorded', 'green');

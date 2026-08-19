@@ -49,6 +49,7 @@ export const api = {
   saveInvoice:   (f)     => call("invoices", "save", f),
   setInvoiceStatus: (id, status) => call("invoices", "set_status", { id, status }),
   addPayment:    (f)     => call("invoices", "add_payment", f),
+  fxPreview:     (amt, currency) => call("invoices", "fx_preview", { amt, currency }),
   deleteInvoice: (id)    => call("invoices", "delete", { id }),
 
   employees:     ()      => call("employees", "list"),
