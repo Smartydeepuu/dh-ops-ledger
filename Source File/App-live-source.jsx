@@ -455,6 +455,39 @@ const payNet = (r) => (Number(r.basic) || 0) + (Number(r.bonus) || 0) - (Number(
 const slipNo = (r) => `DH-SAL-${r.year}${String(r.month).padStart(2, "0")}-${String(r.empId).padStart(2, "0")}`;
 
 
+/* Converts a PeriodDropdown selection into concrete from/to dates (YYYY-MM-DD)
+   for the dashboard API. Custom Range passes the user-picked dates through as-is. */
+function periodToRange(period, customFrom, customTo) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  if (period === "Last Month") {
+    return {
+      from: iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      to:   iso(new Date(now.getFullYear(), now.getMonth(), 0)),
+    };
+  }
+  if (period === "This Quarter") {
+    const qStart = Math.floor(now.getMonth() / 3) * 3;
+    return {
+      from: iso(new Date(now.getFullYear(), qStart, 1)),
+      to:   iso(new Date(now.getFullYear(), qStart + 3, 0)),
+    };
+  }
+  if (period === "This Year") {
+    return { from: `${now.getFullYear()}-01-01`, to: `${now.getFullYear()}-12-31` };
+  }
+  if (period === "Custom Range") {
+    return { from: customFrom || undefined, to: customTo || undefined };
+  }
+  // "This Month" (default)
+  return {
+    from: iso(new Date(now.getFullYear(), now.getMonth(), 1)),
+    to:   iso(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+  };
+}
+
 /* Maps the API dashboard payload into the shape the Dashboard component expects. */
 function buildDashboardData(dash, invoices, payroll, employees) {
   if (!dash) {
@@ -1100,7 +1133,8 @@ export default function App() {
     setInvoices(iv.invoices || []);
     setEmployees(em.employees || []);
     setPayroll(pr.payroll || []);
-    try { setDash(await api.dashboard()); } catch { /* dashboard is optional */ }
+    const range = periodToRange(period, customFrom, customTo);
+    try { setDash(await api.dashboard(range.from, range.to)); } catch { /* dashboard is optional */ }
     try { const st = await api.settings(); setSettings(st.settings); } catch { /* defaults are fine */ }
     try { const dc = await api.documents(); setDocs(dc.documents || []); } catch { /* module may not be migrated yet */ }
     try { const ex = await api.expenses(); setExpenses(ex.expenses || []); } catch { /* module may not be migrated yet */ }
@@ -1120,6 +1154,21 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Re-fetch dashboard stats whenever the period selector changes (the initial
+  // fetch is handled by loadAll() above, so skip the first run here).
+  const periodMounted = useRef(false);
+  useEffect(() => {
+    if (!periodMounted.current) { periodMounted.current = true; return; }
+    if (period === "Custom Range" && (!customFrom || !customTo)) return;
+    (async () => {
+      const range = periodToRange(period, customFrom, customTo);
+      try { setDash(await api.dashboard(range.from, range.to)); } catch { /* dashboard is optional */ }
+    })();
+  }, [period, customFrom, customTo]);
+
+  // Args for api.dashboard(from, to) using whatever period is currently selected.
+  const dashRange = () => { const r = periodToRange(period, customFrom, customTo); return [r.from, r.to]; };
 
   const D = useMemo(() => buildDashboardData(dash, invoices, payroll, employees), [dash, invoices, payroll, employees]);
 
@@ -1572,7 +1621,7 @@ export default function App() {
               onDelete={async (e) => {
                 if (!window.confirm(`Delete "${e.name}"?`)) return;
                 const r = await guard(() => api.deleteExpense(e.id), "Expense deleted.");
-                if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard()); } catch {} }
+                if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard(...dashRange())); } catch {} }
               }} />
           )}
           {page === "documents" && (
@@ -1631,12 +1680,12 @@ export default function App() {
           onSave={async (f) => {
             const r = await guard(() => api.saveExpense(f), "Expense saved.");
             setExpModal(null);
-            if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard()); } catch {} }
+            if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard(...dashRange())); } catch {} }
           }}
           onDelete={async (f) => {
             const r = await guard(() => api.deleteExpense(f.id), "Expense deleted.");
             setExpModal(null);
-            if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard()); } catch {} }
+            if (r) { setExpenses(r.expenses || []); try { setDash(await api.dashboard(...dashRange())); } catch {} }
           }} />
       )}
 
